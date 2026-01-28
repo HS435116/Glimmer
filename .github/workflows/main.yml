@@ -89,7 +89,8 @@ jobs:
             requests
 
       - name: Ensure app assets exist (icon/presplash)
-        working-directory: Glimmer/mobile
+        working-directory: mobile
+
         run: |
           set -e
           if [ ! -f assets/presplash.png ]; then
@@ -117,7 +118,8 @@ jobs:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_ALIAS_PASSWORD: ${{ secrets.ANDROID_KEY_ALIAS_PASSWORD }}
-        working-directory: Glimmer/mobile
+        working-directory: mobile
+
         run: |
           set -euo pipefail
 
@@ -134,7 +136,8 @@ jobs:
 
       - name: Build Release APK
         if: github.event_name != 'pull_request'
-        working-directory: Glimmer/mobile
+        working-directory: mobile
+
         env:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
@@ -183,7 +186,8 @@ jobs:
 
       - name: Build Debug (PR without secrets)
         if: github.event_name == 'pull_request'
-        working-directory: Glimmer/mobile
+        working-directory: mobile
+
         run: |
           set -e
           buildozer -v android debug
@@ -195,10 +199,11 @@ jobs:
         with:
           name: glimmer-android
           path: |
-            Glimmer/mobile/bin/*.aab
-            Glimmer/mobile/bin/*.apk
-            Glimmer/mobile/bin/晨曦智能打卡.aab
-            Glimmer/mobile/bin/晨曦智能打卡.apk
+            mobile/bin/*.aab
+            mobile/bin/*.apk
+            mobile/bin/晨曦智能打卡.aab
+            mobile/bin/晨曦智能打卡.apk
+
           retention-days: 30
           compression-level: 0
 
@@ -207,10 +212,11 @@ jobs:
         run: |
           echo "PWD=$(pwd)"
           ls -la
-          echo "---- Glimmer/mobile ----"
-          ls -la Glimmer/mobile || true
-          echo "---- Glimmer/mobile/.buildozer (top) ----"
-          ls -la Glimmer/mobile/.buildozer || true
+          echo "---- mobile ----"
+          ls -la mobile || true
+          echo "---- mobile/.buildozer (top) ----"
+          ls -la mobile/.buildozer || true
+
 
       - name: Upload debug artifacts on failure
         if: failure()
@@ -219,8 +225,9 @@ jobs:
           name: glimmer-build-debug
           if-no-files-found: ignore
           path: |
-            Glimmer/mobile/.buildozer/**
-            Glimmer/mobile/bin/**
-            Glimmer/mobile/buildozer.spec
+            mobile/.buildozer/**
+            mobile/bin/**
+            mobile/buildozer.spec
+
           retention-days: 7
           compression-level: 0
