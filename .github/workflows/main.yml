@@ -138,7 +138,8 @@ jobs:
           echo "Keystore bytes: $(wc -c < .keystore/release.keystore)"
 
           echo "Validating keystore with keytool..."
-          if ! keytool -list -keystore .keystore/release.keystore -storepass "$ANDROID_KEYSTORE_PASSWORD" >/tmp/ks_info.txt 2>/tmp/ks_err.txt; then
+          if ! keytool -list -v -keystore .keystore/release.keystore -storepass "$ANDROID_KEYSTORE_PASSWORD" >/tmp/ks_info.txt 2>/tmp/ks_err.txt; then
+
             echo "ERROR: keytool cannot read keystore. Please verify GitHub Secrets ANDROID_KEYSTORE_BASE64 / ANDROID_KEYSTORE_PASSWORD." >&2
             echo "keytool stderr:" >&2
             cat /tmp/ks_err.txt >&2 || true
@@ -200,19 +201,24 @@ jobs:
             echo "Keystore file info (before keytool):"
             ls -la .keystore || true
             ls -la .keystore/release.keystore || true
-            if ! keytool -list -keystore .keystore/release.keystore -storepass "$ANDROID_KEYSTORE_PASSWORD" >"$KS_INFO" 2>"$KS_ERR"; then
+
+            if ! keytool -list -v -keystore .keystore/release.keystore -storepass "$ANDROID_KEYSTORE_PASSWORD" >"$KS_INFO" 2>"$KS_ERR"; then
               echo "ERROR: Cannot read release keystore (.keystore/release.keystore)." >&2
               echo "keytool stderr:" >&2
               cat "$KS_ERR" >&2 || true
               exit 1
             fi
-            echo "Keystore aliases:"
+            echo "Keystore aliases (keytool -list -v):"
             grep -E "^Alias name: " "$KS_INFO" || true
 
-            if ! grep -Fq "Alias name: $ANDROID_KEY_ALIAS" "$KS_INFO"; then
-              echo "ERROR: ANDROID_KEY_ALIAS not found in keystore. Please fix GitHub Secrets ANDROID_KEY_ALIAS / ANDROID_KEYSTORE_BASE64." >&2
+            # Reliable alias check (do not parse keytool output)
+            if ! keytool -list -keystore .keystore/release.keystore -storepass "$ANDROID_KEYSTORE_PASSWORD" -alias "$ANDROID_KEY_ALIAS" >/dev/null 2>"$KS_ERR"; then
+              echo "ERROR: ANDROID_KEY_ALIAS not found in keystore (or alias requires different store/key password)." >&2
+              echo "keytool stderr:" >&2
+              cat "$KS_ERR" >&2 || true
               exit 1
             fi
+
 
             java -jar bundletool.jar build-apks \
               --bundle="$AAB_SRC" \
