@@ -18,8 +18,8 @@ jobs:
       - name: Validate mobile project exists
         run: |
           set -e
-          if [ ! -f "Glimmer/mobile/buildozer.spec" ]; then
-            echo "ERROR: Glimmer/mobile/buildozer.spec not found. Please commit Glimmer/mobile into this repo." >&2
+          if [ ! -f "mobile/buildozer.spec" ]; then
+            echo "ERROR: mobile/buildozer.spec not found. Please commit Glimmer/mobile into this repo." >&2
             ls -la
             exit 1
           fi
