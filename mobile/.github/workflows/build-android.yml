@@ -1,4 +1,4 @@
-name: Build Android (Glimmer mobile)
+name: Build Android (Release APK + AAB)
 
 on:
   push:
@@ -10,19 +10,14 @@ on:
 jobs:
   build:
     runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
-      - name: Validate mobile project exists
-        run: |
-          set -e
-          if [ ! -f "mobile/buildozer.spec" ]; then
-            echo "ERROR: mobile/buildozer.spec not found. Please commit Glimmer/mobile into this repo." >&2
-            ls -la
-            exit 1
-          fi
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -89,10 +84,9 @@ jobs:
             requests
 
       - name: Ensure app assets exist (icon/presplash)
-        working-directory: mobile
-
         run: |
           set -e
+          mkdir -p assets
           if [ ! -f assets/presplash.png ]; then
             echo "ERROR: assets/presplash.png not found" >&2
             ls -la assets || true
@@ -112,18 +106,29 @@ jobs:
           ls -la assets
 
       - name: Prepare release keystore (from GitHub Secrets)
+        # Secrets are NOT provided to pull_request runs (especially from forks).
         if: github.event_name != 'pull_request'
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_ALIAS_PASSWORD: ${{ secrets.ANDROID_KEY_ALIAS_PASSWORD }}
-        working-directory: mobile
-
         run: |
           set -euo pipefail
 
-          if [ -z "${ANDROID_KEYSTORE_BASE64:-}" ] || [ -z "${ANDROID_KEYSTORE_PASSWORD:-}" ] || [ -z "${ANDROID_KEY_ALIAS:-}" ] || [ -z "${ANDROID_KEY_ALIAS_PASSWORD:-}" ]; then
+          if [ -n "${ANDROID_KEYSTORE_BASE64:-}" ]; then
+            echo "BASE64 is set? yes"
+          else
+            echo "BASE64 is set? no"
+          fi
+
+          echo "GITHUB_EVENT_NAME=$GITHUB_EVENT_NAME"
+          echo "ANDROID_KEYSTORE_BASE64 length=${#ANDROID_KEYSTORE_BASE64}"
+          echo "ANDROID_KEYSTORE_PASSWORD length=${#ANDROID_KEYSTORE_PASSWORD}"
+          echo "ANDROID_KEY_ALIAS length=${#ANDROID_KEY_ALIAS}"
+          echo "ANDROID_KEY_ALIAS_PASSWORD length=${#ANDROID_KEY_ALIAS_PASSWORD}"
+
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ] || [ -z "$ANDROID_KEYSTORE_PASSWORD" ] || [ -z "$ANDROID_KEY_ALIAS" ] || [ -z "$ANDROID_KEY_ALIAS_PASSWORD" ]; then
             echo "ERROR: Missing one or more required secrets: ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_ALIAS_PASSWORD" >&2
             exit 1
           fi
@@ -132,28 +137,10 @@ jobs:
           printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > .keystore/release.keystore
           chmod 600 .keystore/release.keystore
 
-          echo "Keystore file info:"
-          ls -la .keystore || true
-          ls -la .keystore/release.keystore || true
-          echo "Keystore bytes: $(wc -c < .keystore/release.keystore)"
-
-          echo "Validating keystore with keytool..."
-          if ! keytool -list -keystore .keystore/release.keystore -storepass "$ANDROID_KEYSTORE_PASSWORD" >/tmp/ks_info.txt 2>/tmp/ks_err.txt; then
-            echo "ERROR: keytool cannot read keystore. Please verify GitHub Secrets ANDROID_KEYSTORE_BASE64 / ANDROID_KEYSTORE_PASSWORD." >&2
-            echo "keytool stderr:" >&2
-            cat /tmp/ks_err.txt >&2 || true
-            exit 1
-          fi
-          echo "Keystore aliases (prepare step):"
-          grep -E "^Alias name: " /tmp/ks_info.txt || true
-
           python -c "import os; from pathlib import Path; spec=Path('buildozer.spec'); text=spec.read_text(encoding='utf-8'); text=text.replace('__ANDROID_KEYSTORE_PASSWORD__', os.environ['ANDROID_KEYSTORE_PASSWORD']).replace('__ANDROID_KEY_ALIAS__', os.environ['ANDROID_KEY_ALIAS']).replace('__ANDROID_KEY_ALIAS_PASSWORD__', os.environ['ANDROID_KEY_ALIAS_PASSWORD']); spec.write_text(text, encoding='utf-8')"
-
 
       - name: Build Release APK
         if: github.event_name != 'pull_request'
-        working-directory: mobile
-
         env:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
@@ -163,25 +150,12 @@ jobs:
           export CFLAGS="$CFLAGS -Wno-macro-redefined"
           export CXXFLAGS="$CXXFLAGS -Wno-macro-redefined"
 
+          # 目标：最终产出可安装的 APK。
+          # 注：部分 buildozer/p4a 版本在 release 时默认产出 AAB（bundle），而不直接产出 APK。
           buildozer -v android release
 
-          APK_SRC=$(find bin -maxdepth 1 -type f -iname "*.apk" 2>/dev/null | head -n 1 || true)
-          AAB_SRC=$(find bin -maxdepth 1 -type f -iname "*.aab" 2>/dev/null | head -n 1 || true)
-
-          if [ -z "$APK_SRC" ] && [ -z "$AAB_SRC" ]; then
-            echo "No outputs in bin/, searching workspace..."
-            APK_SRC=$(find . -maxdepth 4 -type f -iname "*.apk" 2>/dev/null | head -n 1 || true)
-            AAB_SRC=$(find . -maxdepth 4 -type f -iname "*.aab" 2>/dev/null | head -n 1 || true)
-            echo "Found: APK_SRC=$APK_SRC AAB_SRC=$AAB_SRC"
-            if [ -n "$APK_SRC" ] || [ -n "$AAB_SRC" ]; then
-              mkdir -p bin
-              [ -n "$APK_SRC" ] && cp -f "$APK_SRC" bin/
-              [ -n "$AAB_SRC" ] && cp -f "$AAB_SRC" bin/
-            fi
-            APK_SRC=$(find bin -maxdepth 1 -type f -iname "*.apk" 2>/dev/null | head -n 1 || true)
-            AAB_SRC=$(find bin -maxdepth 1 -type f -iname "*.aab" 2>/dev/null | head -n 1 || true)
-          fi
-
+          APK_SRC=$(ls -1 bin/*.apk 2>/dev/null | head -n 1 || true)
+          AAB_SRC=$(ls -1 bin/*.aab 2>/dev/null | head -n 1 || true)
 
           if [ -n "$APK_SRC" ]; then
             echo "APK generated by buildozer: $APK_SRC"
@@ -194,26 +168,6 @@ jobs:
             BT_VER=1.17.2
             curl -fsSL -o bundletool.jar "https://github.com/google/bundletool/releases/download/${BT_VER}/bundletool-all-${BT_VER}.jar"
 
-            echo "Checking release keystore alias..."
-            KS_INFO=$(mktemp)
-            KS_ERR=$(mktemp)
-            echo "Keystore file info (before keytool):"
-            ls -la .keystore || true
-            ls -la .keystore/release.keystore || true
-            if ! keytool -list -keystore .keystore/release.keystore -storepass "$ANDROID_KEYSTORE_PASSWORD" >"$KS_INFO" 2>"$KS_ERR"; then
-              echo "ERROR: Cannot read release keystore (.keystore/release.keystore)." >&2
-              echo "keytool stderr:" >&2
-              cat "$KS_ERR" >&2 || true
-              exit 1
-            fi
-            echo "Keystore aliases:"
-            grep -E "^Alias name: " "$KS_INFO" || true
-
-            if ! grep -Fq "Alias name: $ANDROID_KEY_ALIAS" "$KS_INFO"; then
-              echo "ERROR: ANDROID_KEY_ALIAS not found in keystore. Please fix GitHub Secrets ANDROID_KEY_ALIAS / ANDROID_KEYSTORE_BASE64." >&2
-              exit 1
-            fi
-
             java -jar bundletool.jar build-apks \
               --bundle="$AAB_SRC" \
               --output=app.apks \
@@ -222,7 +176,6 @@ jobs:
               --ks-key-alias="$ANDROID_KEY_ALIAS" \
               --ks-pass=pass:"$ANDROID_KEYSTORE_PASSWORD" \
               --key-pass=pass:"$ANDROID_KEY_ALIAS_PASSWORD"
-
 
             rm -rf apks_out
             mkdir -p apks_out
@@ -236,50 +189,125 @@ jobs:
 
           ls -la bin
 
+      - name: Inspect Buildozer staging (debug)
+        if: github.event_name != 'pull_request'
+        run: |
+          set -e
+
+          echo "---- workspace *.py ----"
+          ls -la *.py || true
+
+          echo "---- buildozer.spec (key lines) ----"
+          sed -n '1,120p' buildozer.spec || true
+
+          echo "---- .buildozer tree (dirs, depth 4) ----"
+          find .buildozer -maxdepth 4 -type d -print || true
+
+          echo "---- Possible source staging dirs ----"
+          if [ -d .buildozer/android/app ]; then
+            echo "FOUND: .buildozer/android/app"
+            ls -la .buildozer/android/app || true
+            echo "files (maxdepth 2):"
+            find .buildozer/android/app -maxdepth 2 -type f -print | head -n 220 || true
+          else
+            echo "NOT FOUND: .buildozer/android/app"
+          fi
+
+          echo "---- Find dists/*/private dirs ----"
+          PRIVS=$(find .buildozer -maxdepth 10 -type d -name private 2>/dev/null | head -n 6 || true)
+          echo "$PRIVS" || true
+          for p in $PRIVS; do
+            echo "-- private dir: $p --"
+            find "$p" -maxdepth 2 -type f -print | head -n 220 || true
+          done
+
+          echo "---- Find private.tar produced by p4a (inside .buildozer) ----"
+          PRT=$(find .buildozer -maxdepth 12 -type f -name private.tar 2>/dev/null | head -n 6 || true)
+          echo "$PRT" || true
+          for t in $PRT; do
+            echo "-- tar: $t (head 120) --"
+            tar -tf "$t" | head -n 120 || true
+          done
+
+      - name: Verify APK contains app sources
+        if: github.event_name != 'pull_request'
+        run: |
+          set -e
+
+          APK="bin/晨曦智能打卡.apk"
+          if [ ! -f "$APK" ]; then
+            APK=$(ls -1 bin/*.apk 2>/dev/null | head -n 1 || true)
+          fi
+
+          echo "Verifying APK=$APK"
+          if [ -z "$APK" ] || [ ! -f "$APK" ]; then
+            echo "ERROR: APK not found for verification" >&2
+            ls -la bin || true
+            exit 1
+          fi
+
+          rm -f private.tar
+          unzip -p "$APK" assets/private.tar > private.tar
+
+          echo "private.tar top entries:"
+          tar -tf private.tar | head -n 80 || true
+
+          echo "private.tar python entries (first 120):"
+          tar -tf private.tar | grep -Ei "\\.(py|pyc)$" | head -n 120 || true
+
+          echo "Check for app_main in private.tar:"
+          if tar -tf private.tar | grep -qi "app_main"; then
+            echo "OK: app_main present"
+          else
+            echo "ERROR: app_main missing in assets/private.tar (APK will crash on import)" >&2
+            echo "---- private.tar full list head ----"
+            tar -tf private.tar | head -n 300 || true
+            exit 1
+          fi
+
+
+
       - name: Build Debug (PR without secrets)
         if: github.event_name == 'pull_request'
-        working-directory: mobile
-
         run: |
           set -e
           buildozer -v android debug
           ls -la bin || true
 
-      - name: Upload artifacts
+      - name: Upload Release artifacts
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: glimmer-android
+          name: android-release
+          # 只要 bin 下至少存在一个文件（AAB 或 APK）就会上传成功
+          # 避免因某个文件不存在导致 workflow 失败
           path: |
-            mobile/bin/*.aab
-            mobile/bin/*.apk
-            mobile/bin/晨曦智能打卡.aab
-            mobile/bin/晨曦智能打卡.apk
-
+            bin/*.aab
+            bin/*.apk
+            bin/晨曦智能打卡.aab
+            bin/晨曦智能打卡.apk
           retention-days: 30
           compression-level: 0
 
-      - name: Debug info on failure
+      - name: Debug info on failure (list build dirs)
         if: failure()
         run: |
           echo "PWD=$(pwd)"
           ls -la
-          echo "---- mobile ----"
-          ls -la mobile || true
-          echo "---- mobile/.buildozer (top) ----"
-          ls -la mobile/.buildozer || true
-
+          echo "---- .buildozer (top) ----"
+          ls -la .buildozer || true
+          echo "---- find .buildozer (depth 5) ----"
+          find .buildozer -maxdepth 5 -type d -print || true
 
       - name: Upload debug artifacts on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: glimmer-build-debug
+          name: build-debug
           if-no-files-found: ignore
           path: |
-            mobile/.buildozer/**
-            mobile/bin/**
-            mobile/buildozer.spec
-
+            .buildozer/**
+            bin/**
+            buildozer.spec
           retention-days: 7
           compression-level: 0
