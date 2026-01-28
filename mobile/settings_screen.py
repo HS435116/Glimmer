@@ -129,9 +129,9 @@ class SettingsScreen(Screen):
 
         # 自动识别位置
         auto_location_layout = BoxLayout(size_hint=(1, None), height=dp(50), spacing=dp(10))
-        auto_location_layout.add_widget(Label(text='自动识别位置:', size_hint=(0.3, 1), color=(1, 1, 1, 1)))
+        auto_location_layout.add_widget(Label(text='自动识别位置:', size_hint=(0.24, 1), color=(1, 1, 1, 1)))
 
-        self.auto_location_switch = Button(text='开启', background_color=(0.2, 0.8, 0.2, 1))
+        self.auto_location_switch = Button(text='开启', background_color=(0.2, 0.8, 0.2, 1), size_hint=(None, 1), width=dp(90))
         self.auto_location_switch.bind(on_press=self.toggle_auto_location)
         auto_location_layout.add_widget(self.auto_location_switch)
         location_group.add_widget(auto_location_layout)

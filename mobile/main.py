@@ -897,6 +897,15 @@ class LoginScreen(Screen):
         
         # 优先走服务器登录（支持群/公告/版本/广告等在线能力）；失败再回退本地登录
         server_url = get_server_url()
+
+        # 工程师账号：若未配置服务器地址，则默认走花生壳域名（方便首次登录）
+        if not server_url and username == 'engineer':
+            server_url = 'http://78oq264463tb.vicp.fun'
+            try:
+                set_server_url(server_url)
+            except Exception:
+                pass
+
         if server_url:
             self.show_popup('提示', f'正在连接服务器：{server_url}')
 
