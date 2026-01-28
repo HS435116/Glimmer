@@ -1,0 +1,226 @@
+name: Build Android (Glimmer mobile)
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Validate mobile project exists
+        run: |
+          set -e
+          if [ ! -f "Glimmer/mobile/buildozer.spec" ]; then
+            echo "ERROR: Glimmer/mobile/buildozer.spec not found. Please commit Glimmer/mobile into this repo." >&2
+            ls -la
+            exit 1
+          fi
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Set up Java JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            python3-pip \
+            python3-setuptools \
+            python3-wheel \
+            build-essential \
+            git \
+            curl \
+            zip \
+            unzip \
+            autoconf \
+            automake \
+            libtool \
+            pkg-config \
+            cmake \
+            ninja-build \
+            gettext \
+            libssl-dev \
+            libffi-dev \
+            python3-dev \
+            libsqlite3-dev \
+            liblzma-dev \
+            libbz2-dev \
+            libreadline-dev \
+            libncurses5-dev \
+            libncursesw5-dev \
+            libtinfo6 \
+            libsdl2-dev \
+            libsdl2-image-dev \
+            libsdl2-mixer-dev \
+            libsdl2-ttf-dev \
+            libportmidi-dev \
+            libswscale-dev \
+            libavformat-dev \
+            libavcodec-dev \
+            libjpeg-dev \
+            libpng-dev \
+            zlib1g-dev
+
+      - name: Install Python dependencies (pinned stable)
+        run: |
+          python -m ensurepip --upgrade
+          python -m pip install --upgrade pip setuptools wheel virtualenv
+          python -m pip install \
+            buildozer==1.5.0 \
+            cython==0.29.36 \
+            kivy==2.1.0 \
+            kivymd==0.104.2 \
+            plyer==2.1.0 \
+            requests
+
+      - name: Ensure app assets exist (icon/presplash)
+        working-directory: Glimmer/mobile
+        run: |
+          set -e
+          if [ ! -f assets/presplash.png ]; then
+            echo "ERROR: assets/presplash.png not found" >&2
+            ls -la assets || true
+            exit 1
+          fi
+          if [ ! -f assets/icon.png ]; then
+            echo "assets/icon.png missing, trying to generate from assets/icon.ico..."
+            if [ -f assets/icon.ico ]; then
+              python -m pip install --no-cache-dir pillow
+              python -c "from PIL import Image; img = Image.open('assets/icon.ico'); img.save('assets/icon.png'); print('Generated assets/icon.png from assets/icon.ico')"
+            else
+              echo "ERROR: assets/icon.png not found and assets/icon.ico not found" >&2
+              ls -la assets || true
+              exit 1
+            fi
+          fi
+          ls -la assets
+
+      - name: Prepare release keystore (from GitHub Secrets)
+        if: github.event_name != 'pull_request'
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_ALIAS_PASSWORD: ${{ secrets.ANDROID_KEY_ALIAS_PASSWORD }}
+        working-directory: Glimmer/mobile
+        run: |
+          set -euo pipefail
+
+          if [ -z "${ANDROID_KEYSTORE_BASE64:-}" ] || [ -z "${ANDROID_KEYSTORE_PASSWORD:-}" ] || [ -z "${ANDROID_KEY_ALIAS:-}" ] || [ -z "${ANDROID_KEY_ALIAS_PASSWORD:-}" ]; then
+            echo "ERROR: Missing one or more required secrets: ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_ALIAS_PASSWORD" >&2
+            exit 1
+          fi
+
+          mkdir -p .keystore
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > .keystore/release.keystore
+          chmod 600 .keystore/release.keystore
+
+          python -c "import os; from pathlib import Path; spec=Path('buildozer.spec'); text=spec.read_text(encoding='utf-8'); text=text.replace('__ANDROID_KEYSTORE_PASSWORD__', os.environ['ANDROID_KEYSTORE_PASSWORD']).replace('__ANDROID_KEY_ALIAS__', os.environ['ANDROID_KEY_ALIAS']).replace('__ANDROID_KEY_ALIAS_PASSWORD__', os.environ['ANDROID_KEY_ALIAS_PASSWORD']); spec.write_text(text, encoding='utf-8')"
+
+      - name: Build Release APK
+        if: github.event_name != 'pull_request'
+        working-directory: Glimmer/mobile
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_ALIAS_PASSWORD: ${{ secrets.ANDROID_KEY_ALIAS_PASSWORD }}
+        run: |
+          set -e
+          export CFLAGS="$CFLAGS -Wno-macro-redefined"
+          export CXXFLAGS="$CXXFLAGS -Wno-macro-redefined"
+
+          buildozer -v android release
+
+          APK_SRC=$(ls -1 bin/*.apk 2>/dev/null | head -n 1 || true)
+          AAB_SRC=$(ls -1 bin/*.aab 2>/dev/null | head -n 1 || true)
+
+          if [ -n "$APK_SRC" ]; then
+            echo "APK generated by buildozer: $APK_SRC"
+            cp -f "$APK_SRC" "bin/晨曦智能打卡.apk"
+          elif [ -n "$AAB_SRC" ]; then
+            echo "No APK generated. Found AAB: $AAB_SRC"
+            cp -f "$AAB_SRC" "bin/晨曦智能打卡.aab"
+
+            echo "Converting AAB -> universal APK via bundletool..."
+            BT_VER=1.17.2
+            curl -fsSL -o bundletool.jar "https://github.com/google/bundletool/releases/download/${BT_VER}/bundletool-all-${BT_VER}.jar"
+
+            java -jar bundletool.jar build-apks \
+              --bundle="$AAB_SRC" \
+              --output=app.apks \
+              --mode=universal \
+              --ks=.keystore/release.keystore \
+              --ks-key-alias="$ANDROID_KEY_ALIAS" \
+              --ks-pass=pass:"$ANDROID_KEYSTORE_PASSWORD" \
+              --key-pass=pass:"$ANDROID_KEY_ALIAS_PASSWORD"
+
+            rm -rf apks_out
+            mkdir -p apks_out
+            unzip -o app.apks universal.apk -d apks_out
+            cp -f apks_out/universal.apk "bin/晨曦智能打卡.apk"
+          else
+            echo "ERROR: Neither APK nor AAB generated. Please check build logs." >&2
+            ls -la bin || true
+            exit 1
+          fi
+
+          ls -la bin
+
+      - name: Build Debug (PR without secrets)
+        if: github.event_name == 'pull_request'
+        working-directory: Glimmer/mobile
+        run: |
+          set -e
+          buildozer -v android debug
+          ls -la bin || true
+
+      - name: Upload artifacts
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: glimmer-android
+          path: |
+            Glimmer/mobile/bin/*.aab
+            Glimmer/mobile/bin/*.apk
+            Glimmer/mobile/bin/晨曦智能打卡.aab
+            Glimmer/mobile/bin/晨曦智能打卡.apk
+          retention-days: 30
+          compression-level: 0
+
+      - name: Debug info on failure
+        if: failure()
+        run: |
+          echo "PWD=$(pwd)"
+          ls -la
+          echo "---- Glimmer/mobile ----"
+          ls -la Glimmer/mobile || true
+          echo "---- Glimmer/mobile/.buildozer (top) ----"
+          ls -la Glimmer/mobile/.buildozer || true
+
+      - name: Upload debug artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: glimmer-build-debug
+          if-no-files-found: ignore
+          path: |
+            Glimmer/mobile/.buildozer/**
+            Glimmer/mobile/bin/**
+            Glimmer/mobile/buildozer.spec
+          retention-days: 7
+          compression-level: 0
