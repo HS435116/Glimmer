@@ -1,4 +1,11 @@
 import os
+import sys
+
+
+if sys.version_info < (3, 10):
+    raise SystemExit(f"Glimmer server 需要 Python >= 3.10，当前为 {sys.version.split()[0]}")
+
+
 import uvicorn
 
 
@@ -11,3 +18,4 @@ if __name__ == '__main__':
     log_level = (os.environ.get('GLIMMER_LOG_LEVEL') or 'info').strip().lower()
 
     uvicorn.run('app.main:app', host=host, port=port, reload=reload_flag, log_level=log_level)
+

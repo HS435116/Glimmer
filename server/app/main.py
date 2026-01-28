@@ -306,9 +306,10 @@ def set_group_admin(
     group_id: int,
     member_user_id: int,
     is_admin: bool = True,
-    db: Annotated[Session, Depends(get_db)] = Depends(get_db),
-    user: Annotated[User, Depends(get_current_user)] = Depends(get_current_user),
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User, Depends(get_current_user)],
 ):
+
     # 只有工程师可以授予/回收群管理员
     _require_engineer(user)
     mem = db.execute(select(Membership).where(and_(Membership.group_id == group_id, Membership.user_id == member_user_id))).scalar_one_or_none()
