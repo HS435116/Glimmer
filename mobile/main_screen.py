@@ -36,8 +36,22 @@ from kivy.clock import Clock
 from kivy.metrics import dp
 from kivy.graphics import Color, Rectangle, RoundedRectangle
 from kivy.utils import platform as kivy_platform
-from plyer import gps, notification
+
+# plyer 在不同平台/权限环境下可能不可用；为避免启动即异常导致“看起来进后台/闪退”，这里做容错。
+try:
+    from plyer import gps, notification
+except Exception:  # pragma: no cover
+    gps = None
+
+    class _NotificationFallback:
+        @staticmethod
+        def notify(**kwargs):
+            return
+
+    notification = _NotificationFallback()
+
 from main import StyledButton, db
+
 import math
 import webbrowser
 from urllib.parse import urlparse
