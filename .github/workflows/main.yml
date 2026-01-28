@@ -178,6 +178,19 @@ jobs:
             BT_VER=1.17.2
             curl -fsSL -o bundletool.jar "https://github.com/google/bundletool/releases/download/${BT_VER}/bundletool-all-${BT_VER}.jar"
 
+            echo "Checking release keystore alias..."
+            KS_INFO=$(mktemp)
+            if ! keytool -list -keystore .keystore/release.keystore -storepass "$ANDROID_KEYSTORE_PASSWORD" >"$KS_INFO" 2>/dev/null; then
+              echo "ERROR: Cannot read release keystore (.keystore/release.keystore)." >&2
+              exit 1
+            fi
+            echo "Keystore aliases:"
+            grep -E "^Alias name: " "$KS_INFO" || true
+            if ! grep -Fq "Alias name: $ANDROID_KEY_ALIAS" "$KS_INFO"; then
+              echo "ERROR: ANDROID_KEY_ALIAS not found in keystore. Please fix GitHub Secrets ANDROID_KEY_ALIAS / ANDROID_KEYSTORE_BASE64." >&2
+              exit 1
+            fi
+
             java -jar bundletool.jar build-apks \
               --bundle="$AAB_SRC" \
               --output=app.apks \
@@ -186,6 +199,7 @@ jobs:
               --ks-key-alias="$ANDROID_KEY_ALIAS" \
               --ks-pass=pass:"$ANDROID_KEYSTORE_PASSWORD" \
               --key-pass=pass:"$ANDROID_KEY_ALIAS_PASSWORD"
+
 
             rm -rf apks_out
             mkdir -p apks_out

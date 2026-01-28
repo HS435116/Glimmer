@@ -371,10 +371,11 @@ def post_group_announcement(
 
 @app.get('/announcements/feed', response_model=list[AnnouncementOut])
 def announcements_feed(
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User, Depends(get_current_user)],
     since: str | None = Query(default=None, description='ISO datetime, e.g. 2026-01-28T10:00:00'),
-    db: Annotated[Session, Depends(get_db)] = Depends(get_db),
-    user: Annotated[User, Depends(get_current_user)] = Depends(get_current_user),
 ):
+
     since_dt = None
     if since:
         try:
@@ -481,10 +482,11 @@ def punch(
 
 @app.get('/attendance/month', response_model=list[PunchOut])
 def attendance_month(
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User, Depends(get_current_user)],
     month: str = Query(..., description='YYYY-MM'),
-    db: Annotated[Session, Depends(get_db)] = Depends(get_db),
-    user: Annotated[User, Depends(get_current_user)] = Depends(get_current_user),
 ):
+
     if len(month) != 7:
         raise HTTPException(status_code=400, detail='bad month')
     rows = db.execute(
@@ -671,10 +673,11 @@ def remove_group_member(
 
 @app.get('/admin/users')
 def admin_users(
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User, Depends(get_current_user)],
     q: str | None = Query(default=None),
-    db: Annotated[Session, Depends(get_db)] = Depends(get_db),
-    user: Annotated[User, Depends(get_current_user)] = Depends(get_current_user),
 ):
+
     _require_engineer(user)
     stmt = select(User.id, User.username, User.role, User.created_at).order_by(User.id.desc()).limit(500)
     if q:
