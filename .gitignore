@@ -24,3 +24,7 @@ Thumbs.db
 *.keystore
 *.jks
 *.p12
+
+# Local exports / build logs
+server/users.json
+mobile/buildozer - *.txt

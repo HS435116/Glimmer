@@ -141,7 +141,8 @@ class GroupScreen(Screen):
 
                 Clock.schedule_once(lambda *_: ui(), 0)
             except Exception as e:
-                Clock.schedule_once(lambda *_: (setattr(self.info_label, 'text', '刷新失败'), self.show_popup('错误', str(e))), 0)
+                err = str(e)
+                Clock.schedule_once(lambda *_: (setattr(self.info_label, 'text', '刷新失败'), self.show_popup('错误', err)), 0)
 
         Thread(target=work, daemon=True).start()
 
