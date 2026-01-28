@@ -3,9 +3,11 @@ from __future__ import annotations
 import os
 import random
 from datetime import datetime
+from pathlib import Path
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi.responses import FileResponse
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy import select, and_, or_, func
 from sqlalchemy.orm import Session
@@ -52,6 +54,38 @@ from .security import create_access_token, decode_token, hash_password, verify_p
 app = FastAPI(title='Glimmer Attendance Server', version='0.1.0')
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl='/auth/login')
+
+
+_SERVER_DIR = Path(__file__).resolve().parents[1]  # .../server
+_PUBLIC_DIR = _SERVER_DIR / 'public'
+_DEFAULT_APK_NAMES = (
+    'app.apk',
+    'latest.apk',
+    '晨曦智能打卡.apk',
+)
+
+
+def _resolve_apk_path() -> Path | None:
+    env = (os.environ.get('GLIMMER_APK_PATH') or '').strip()
+    if env:
+        p = Path(env).expanduser()
+        return p if p.is_file() else None
+
+    for name in _DEFAULT_APK_NAMES:
+        p = _PUBLIC_DIR / name
+        if p.is_file():
+            return p
+
+    if _PUBLIC_DIR.is_dir():
+        apks = sorted(
+            _PUBLIC_DIR.glob('*.apk'),
+            key=lambda x: x.stat().st_mtime,
+            reverse=True,
+        )
+        if apks:
+            return apks[0]
+
+    return None
 
 
 def _now_date_str() -> str:
@@ -143,6 +177,20 @@ def _startup():
 @app.get('/health')
 def health():
     return {'ok': True}
+
+
+@app.get('/download/apk')
+def download_apk():
+    p = _resolve_apk_path()
+    if not p:
+        raise HTTPException(status_code=404, detail='apk not found')
+
+    # filename 参数会自动设置 Content-Disposition: attachment
+    return FileResponse(
+        path=str(p),
+        media_type='application/vnd.android.package-archive',
+        filename=p.name,
+    )
 
 
 @app.post('/auth/register', response_model=UserOut)
