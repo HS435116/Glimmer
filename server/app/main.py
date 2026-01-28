@@ -305,10 +305,11 @@ def reject_join(
 def set_group_admin(
     group_id: int,
     member_user_id: int,
-    is_admin: bool = True,
     db: Annotated[Session, Depends(get_db)],
     user: Annotated[User, Depends(get_current_user)],
+    is_admin: bool = True,
 ):
+
 
     # 只有工程师可以授予/回收群管理员
     _require_engineer(user)
