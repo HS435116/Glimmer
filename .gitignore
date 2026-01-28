@@ -18,3 +18,9 @@ Thumbs.db
 
 # Local data
 *.db
+
+# Secrets / keystore helpers
+*.b64
+*.keystore
+*.jks
+*.p12
