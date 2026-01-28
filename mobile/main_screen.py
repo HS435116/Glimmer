@@ -272,8 +272,59 @@ class MainScreen(Screen):
             # 在线公告轮询（群内公告/全局公告）：只要有网络就可收到通知
             self._start_server_feed_polling()
 
+            # 刷新“全局公告/版本信息”，用于公告按钮展示与闪烁提醒
+            self._start_public_config_polling()
+
+
+    def _start_public_config_polling(self):
+        if getattr(self, '_public_cfg_ev', None):
+            return
+
+        # 进入主界面立即拉一次
+        Clock.schedule_once(lambda *_: self.refresh_server_public_announcement(), 0.4)
+        # 后续周期刷新（避免发布公告后客户端不更新）
+        self._public_cfg_ev = Clock.schedule_interval(lambda *_: self.refresh_server_public_announcement(), 30)
+
+
+    def refresh_server_public_announcement(self):
+        app = App.get_running_app()
+        base_url = str(getattr(app, 'server_url', '') or '').strip()
+        if not base_url:
+            return
+
+        def work():
+            try:
+                api = GlimmerAPI(base_url)
+                if not api.health():
+                    return
+
+                latest = api.public_latest_global_announcement()
+                version = api.public_version()
+
+                settings = db.get_user_settings('__global__') or {}
+
+                if latest:
+                    settings['announcement_text'] = str(latest.get('content') or '')
+                    created_at = str(latest.get('created_at') or '')
+                    settings['announcement_time'] = created_at[:16].replace('T', ' ') if created_at else ''
+
+                if version:
+                    settings['latest_version'] = str(version.get('latest_version') or '')
+                    settings['latest_version_note'] = str(version.get('note') or '')
+                    updated_at = str(version.get('updated_at') or '')
+                    settings['latest_version_time'] = updated_at[:16].replace('T', ' ') if updated_at else ''
+
+                db.save_user_settings('__global__', settings)
+
+                Clock.schedule_once(lambda *_: (self.update_announcement_indicator(), self.check_for_updates()), 0)
+            except Exception:
+                return
+
+        Thread(target=work, daemon=True).start()
+
 
     def _start_server_feed_polling(self):
+
         if getattr(self, '_feed_poll_ev', None):
             return
 

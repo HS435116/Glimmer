@@ -41,6 +41,7 @@ from kivy.metrics import dp
 from kivy.utils import platform as kivy_platform
 from kivy.clock import Clock
 from kivy.logger import Logger
+from kivy.storage.jsonstore import JsonStore
 
 
 
@@ -419,7 +420,9 @@ class AttendanceApp(App):
                 if not self.sm.has_screen(name):
                     self.sm.add_widget(widget)
 
-            self.sm.current = 'login'
+            # 尝试恢复上次登录状态（避免用户切到桌面/后台后回来需要重新登录）
+            self._restore_cached_session(route=True)
+
             self._screens_inited = True
             self._diag_event('init_screens_ok')
         except Exception:
@@ -624,6 +627,56 @@ class AttendanceApp(App):
 
 
     
+    def _restore_cached_session(self, route: bool = False) -> bool:
+        """从 glimmer_client.json 恢复服务器登录态。
+
+        说明：Android 上点击 Home / 切后台后，系统可能回收进程；再次打开时会重新启动。
+        这里把 token/角色/服务器地址恢复到 App 属性里，避免“未点退出但登录失效”。
+        """
+        try:
+            store = JsonStore('glimmer_client.json')
+            if not store.exists('auth'):
+                if route and getattr(self, 'sm', None):
+                    self.sm.current = 'login'
+                return False
+
+            auth = store.get('auth') or {}
+            username = str(auth.get('username') or '').strip()
+            token = str(auth.get('token') or '').strip()
+            role = str(auth.get('role') or 'user').strip() or 'user'
+            server_url = str(auth.get('server_url') or '').strip().rstrip('/')
+
+            if not username or not token or not server_url:
+                if route and getattr(self, 'sm', None):
+                    self.sm.current = 'login'
+                return False
+
+            # 写入 App 属性，供各页面调用
+            self.current_user = username
+            self.api_token = token
+            self.server_role = role
+            self.server_url = server_url
+            self.user_data = {
+                'role': role,
+                'is_admin': role in ('admin', 'engineer'),
+            }
+
+            if route and getattr(self, 'sm', None):
+                try:
+                    self.sm.current = 'main'
+                except Exception:
+                    self.sm.current = 'login'
+
+            return True
+        except Exception:
+            if route and getattr(self, 'sm', None):
+                try:
+                    self.sm.current = 'login'
+                except Exception:
+                    pass
+            return False
+
+
     def on_resume(self):
         """应用恢复时调用（移动端）"""
         self._diag_event('on_resume')
@@ -633,6 +686,12 @@ class AttendanceApp(App):
         self._allow_background = False
         self._in_pip = False
         self._set_pip_close_visible(False)
+
+        # 恢复时也尝试从本地缓存恢复登录态（部分 ROM 会触发“伪重启/界面重建”）
+        try:
+            self._restore_cached_session(route=False)
+        except Exception:
+            pass
 
         try:
             main_screen = self.sm.get_screen('main')

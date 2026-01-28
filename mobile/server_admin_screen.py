@@ -73,7 +73,13 @@ class ServerAdminScreen(Screen):
             pass
 
     def _popup(self, title: str, msg: str):
-        p = Popup(title=title, content=Label(text=msg), size_hint=(0.9, 0.5), background='')
+        p = Popup(
+            title=title,
+            content=Label(text=msg, color=(1, 1, 1, 1)),
+            size_hint=(0.9, 0.5),
+            background_color=(0.0667, 0.149, 0.3098, 1),
+            background='',
+        )
         p.open()
 
     def _api(self) -> GlimmerAPI:

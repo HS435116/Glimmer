@@ -28,3 +28,9 @@ Thumbs.db
 # Local exports / build logs
 server/users.json
 mobile/buildozer - *.txt
+
+# Mobile build outputs (do not commit)
+*.apk
+*.aab
+server/public/
+

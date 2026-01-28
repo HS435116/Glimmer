@@ -71,8 +71,15 @@ class GroupScreen(Screen):
         Clock.schedule_once(lambda *_: self.refresh(), 0)
 
     def show_popup(self, title: str, message: str):
-        popup = Popup(title=title, content=Label(text=message), size_hint=(0.85, 0.45), background='')
+        popup = Popup(
+            title=title,
+            content=Label(text=message, color=(1, 1, 1, 1)),
+            size_hint=(0.85, 0.45),
+            background_color=(0.0667, 0.149, 0.3098, 1),
+            background='',
+        )
         popup.open()
+
 
     def go_back(self):
         try:
