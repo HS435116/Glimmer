@@ -136,7 +136,12 @@ android.archs = arm64-v8a,armeabi-v7a
 # (int) port number to specify an explicit --port= p4a argument (eg for bootstrap flask)
 #p4a.port =
 
+# (str) Extra arguments to pass to python-for-android.
+# Avoid CI failing on stdlib test files (e.g. lib2to3 py2 grammar) during byte-compilation.
+p4a.extra_args = --no-byte-compile-python
+
 [buildozer]
+
 
 # (int) Log level (0 = error only, 1 = info, 2 = debug (with command output))
 log_level = 2
