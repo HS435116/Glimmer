@@ -245,6 +245,32 @@ class GlimmerAPI:
             self._raise(r)
         return r.json() or {}
 
+    def punch_attendance(
+        self,
+        token: str,
+        status: str = '打卡成功',
+        lat: float | None = None,
+        lon: float | None = None,
+        notes: str = '',
+        group_id: int | None = None,
+    ) -> dict[str, Any]:
+        payload = {
+            'group_id': (int(group_id) if group_id is not None else None),
+            'status': str(status or '打卡成功'),
+            'lat': (float(lat) if lat is not None else None),
+            'lon': (float(lon) if lon is not None else None),
+            'notes': str(notes or ''),
+        }
+        r = requests.post(
+            self._url('/attendance/punch'),
+            json=payload,
+            timeout=self.timeout,
+            headers=self._headers(token),
+        )
+        if r.status_code != 200:
+            self._raise(r)
+        return r.json() or {}
+
     def managed_groups(self, token: str) -> list[dict[str, Any]]:
         r = requests.get(self._url('/admin/groups/managed'), timeout=self.timeout, headers=self._headers(token))
         if r.status_code != 200:

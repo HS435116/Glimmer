@@ -28,7 +28,7 @@ class ServerAdminScreen(Screen):
         root.add_widget(self.title_label)
 
         tab_row = BoxLayout(size_hint=(1, None), height=dp(40), spacing=dp(6))
-        self.tab_join = Button(text='入群审核')
+        self.tab_join = Button(text='入队审核')
         self.tab_corr = Button(text='补录审核')
         self.tab_members = Button(text='成员管理')
         self.tab_announce = Button(text='发公告')
@@ -73,9 +73,18 @@ class ServerAdminScreen(Screen):
             pass
 
     def _popup(self, title: str, msg: str):
+        text = str(msg or '')
+        align = 'left' if ('\n' in text or len(text) > 18) else 'center'
+        valign = 'top' if align == 'left' else 'middle'
+
+        content = BoxLayout(orientation='vertical', spacing=dp(10), padding=dp(18))
+        label = Label(text=text, color=(1, 1, 1, 1), halign=align, valign=valign)
+        label.bind(size=lambda instance, value: setattr(instance, 'text_size', value))
+        content.add_widget(label)
+
         p = Popup(
-            title=title,
-            content=Label(text=msg, color=(1, 1, 1, 1)),
+            title=str(title or ''),
+            content=content,
             size_hint=(0.9, 0.5),
             background_color=(0.0667, 0.149, 0.3098, 1),
             background='',
@@ -132,7 +141,7 @@ class ServerAdminScreen(Screen):
             self._build_engineer_tab()
 
     def _build_join_tab(self):
-        self.info.text = '加载入群申请...'
+        self.info.text = '加载入队申请...'
         scroll = ScrollView(size_hint=(1, 1))
         lst = GridLayout(cols=1, spacing=dp(8), size_hint_y=None)
         lst.bind(minimum_height=lst.setter('height'))
@@ -146,10 +155,10 @@ class ServerAdminScreen(Screen):
                 def ui():
                     lst.clear_widgets()
                     if not items:
-                        lst.add_widget(Label(text='暂无待审核入群申请', size_hint_y=None, height=dp(28), color=(0.9, 0.95, 1, 1)))
+                        lst.add_widget(Label(text='暂无待审核入队申请', size_hint_y=None, height=dp(28), color=(0.9, 0.95, 1, 1)))
                     for it in items:
                         rid = it.get('id')
-                        text = f"{it.get('username')} 申请加入 {it.get('group_name')}"
+                        text = f"{it.get('username')} 申请加入团队 {it.get('group_name')}"
                         row = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(6))
                         row.add_widget(Label(text=text, color=(0.9, 0.95, 1, 1)))
                         ok_btn = Button(text='通过', size_hint=(None, 1), width=dp(70))
@@ -159,7 +168,7 @@ class ServerAdminScreen(Screen):
                         row.add_widget(ok_btn)
                         row.add_widget(no_btn)
                         lst.add_widget(row)
-                    self.info.text = '入群申请加载完成'
+                    self.info.text = '入队申请加载完成'
 
                 Clock.schedule_once(lambda *_: ui(), 0)
             except Exception as e:
@@ -244,13 +253,35 @@ class ServerAdminScreen(Screen):
         Thread(target=work, daemon=True).start()
 
     def _build_members_tab(self):
-        self.info.text = '加载可管理的群...'
+        self.info.text = '加载可管理的团队...'
         box = BoxLayout(orientation='vertical', spacing=dp(8))
 
         top = BoxLayout(size_hint=(1, None), height=dp(44), spacing=dp(8))
-        self.members_group_spinner = Spinner(text='选择群', values=[], size_hint=(1, 1))
-        refresh_btn = Button(text='刷新成员', size_hint=(None, 1), width=dp(90))
+        self.members_group_spinner = Spinner(
+            text='选择团队',
+            values=[],
+            size_hint=(0.55, 1),
+            shorten=True,
+            shorten_from='right',
+            halign='center',
+            valign='middle',
+        )
+        self.members_group_spinner.bind(size=lambda instance, value: setattr(instance, 'text_size', value))
+
+        self.members_group_code_label = Label(
+            text='团队ID:',
+            size_hint=(0.25, 1),
+            color=(0.9, 0.95, 1, 1),
+            halign='right',
+            valign='middle',
+            shorten=True,
+            shorten_from='right',
+        )
+        self.members_group_code_label.bind(size=lambda instance, value: setattr(instance, 'text_size', value))
+
+        refresh_btn = Button(text='刷新成员', size_hint=(0.2, 1))
         top.add_widget(self.members_group_spinner)
+        top.add_widget(self.members_group_code_label)
         top.add_widget(refresh_btn)
         box.add_widget(top)
 
@@ -264,20 +295,34 @@ class ServerAdminScreen(Screen):
 
         def set_groups(groups: list[dict]):
             values = []
-            mapping = {}
+            mapping: dict[str, int] = {}
+            code_map: dict[str, str] = {}
             for g in groups:
-                label = f"{g.get('name')}（群ID:{g.get('group_code')} / gid:{g.get('id')}）"
-                values.append(label)
-                mapping[label] = int(g.get('id'))
+                name = str(g.get('name') or '')
+                code = str(g.get('group_code') or '')
+                if not name:
+                    continue
+                values.append(name)
+                try:
+                    mapping[name] = int(g.get('id'))
+                    code_map[name] = code
+                except Exception:
+                    continue
+
             self._members_group_map = mapping
+            self._members_group_code_map = code_map
             self.members_group_spinner.values = values
+
             if values:
                 self.members_group_spinner.text = values[0]
                 self._members_group_id = mapping.get(values[0])
+                c0 = str(code_map.get(values[0]) or '')
+                self.members_group_code_label.text = f"团队ID:{c0}" if c0 else '团队ID:'
                 self._refresh_members_list(lst, int(self._members_group_id))
                 self.info.text = '成员列表加载完成'
             else:
-                self.info.text = '你没有可管理的群'
+                self.info.text = '你没有可管理的团队'
+                self.members_group_code_label.text = '团队ID:'
                 lst.clear_widgets()
                 lst.add_widget(Label(text='（暂无）', size_hint_y=None, height=dp(28), color=(0.9, 0.95, 1, 1)))
 
@@ -285,6 +330,8 @@ class ServerAdminScreen(Screen):
             try:
                 gid = int(self._members_group_map.get(text))
                 self._members_group_id = gid
+                code = str((getattr(self, '_members_group_code_map', {}) or {}).get(text) or '')
+                self.members_group_code_label.text = f"团队ID:{code}" if code else '团队ID:'
                 self._refresh_members_list(lst, gid)
             except Exception:
                 return
@@ -355,7 +402,7 @@ class ServerAdminScreen(Screen):
 
     def _build_announce_tab(self):
         role = self._role()
-        self.info.text = '发布公告：工程师=全局；管理员=群内（先选群）'
+        self.info.text = '发布公告：工程师=全局；管理员=团队内（先选团队）'
 
         box = BoxLayout(orientation='vertical', spacing=dp(8))
         self.announce_title = TextInput(hint_text='标题', multiline=False, size_hint=(1, None), height=dp(44))
@@ -366,32 +413,72 @@ class ServerAdminScreen(Screen):
 
         self._announce_group_id = None
         self.announce_group_spinner = None
+        self.announce_group_code_label = None
 
         if role != 'engineer':
-            self.announce_group_spinner = Spinner(text='选择群（我管理的群）', values=[], size_hint=(1, None), height=dp(44))
-            box.add_widget(self.announce_group_spinner)
+            row = BoxLayout(size_hint=(1, None), height=dp(44), spacing=dp(8))
+            self.announce_group_spinner = Spinner(
+                text='选择团队（我管理的团队）',
+                values=[],
+                size_hint=(0.7, 1),
+                shorten=True,
+                shorten_from='right',
+                halign='center',
+                valign='middle',
+            )
+            self.announce_group_spinner.bind(size=lambda instance, value: setattr(instance, 'text_size', value))
+
+            self.announce_group_code_label = Label(
+                text='团队ID:',
+                size_hint=(0.3, 1),
+                color=(0.9, 0.95, 1, 1),
+                halign='right',
+                valign='middle',
+                shorten=True,
+                shorten_from='right',
+            )
+            self.announce_group_code_label.bind(size=lambda instance, value: setattr(instance, 'text_size', value))
+
+            row.add_widget(self.announce_group_spinner)
+            row.add_widget(self.announce_group_code_label)
+            box.add_widget(row)
 
             def set_groups(groups: list[dict]):
                 values = []
-                mapping = {}
+                mapping: dict[str, int] = {}
+                code_map: dict[str, str] = {}
                 for g in groups:
-                    label = f"{g.get('name')}（群ID:{g.get('group_code')} / gid:{g.get('id')}）"
-                    values.append(label)
-                    mapping[label] = int(g.get('id'))
+                    name = str(g.get('name') or '')
+                    code = str(g.get('group_code') or '')
+                    if not name:
+                        continue
+                    values.append(name)
+                    try:
+                        mapping[name] = int(g.get('id'))
+                        code_map[name] = code
+                    except Exception:
+                        continue
                 self._announce_group_map = mapping
+                self._announce_group_code_map = code_map
                 self.announce_group_spinner.values = values
                 if values:
                     self.announce_group_spinner.text = values[0]
                     self._announce_group_id = mapping.get(values[0])
+                    c0 = str(code_map.get(values[0]) or '')
+                    self.announce_group_code_label.text = f"团队ID:{c0}" if c0 else '团队ID:'
                 else:
-                    self.announce_group_spinner.text = '（无可管理群）'
+                    self.announce_group_spinner.text = '（无可管理团队）'
+                    self.announce_group_code_label.text = '团队ID:'
                     self._announce_group_id = None
 
             def on_select(_spinner, text):
                 try:
                     self._announce_group_id = int(self._announce_group_map.get(text))
+                    code = str((getattr(self, '_announce_group_code_map', {}) or {}).get(text) or '')
+                    self.announce_group_code_label.text = f"团队ID:{code}" if code else '团队ID:'
                 except Exception:
                     self._announce_group_id = None
+                    self.announce_group_code_label.text = '团队ID:'
 
             self.announce_group_spinner.bind(text=on_select)
             self._load_managed_groups(set_groups, on_err=lambda e: self._popup('错误', str(e)))
@@ -420,7 +507,7 @@ class ServerAdminScreen(Screen):
                 else:
                     gid = int(self._announce_group_id or 0)
                     if gid <= 0:
-                        raise RuntimeError('请选择要发布公告的群')
+                        raise RuntimeError('请选择要发布公告的团队')
                     api.post_group_announcement(token, gid, title, content)
                 Clock.schedule_once(lambda *_: self._popup('成功', '已发布'), 0)
             except Exception as e:
@@ -437,7 +524,7 @@ class ServerAdminScreen(Screen):
 
         # 创建群
         grp_row = BoxLayout(size_hint=(1, None), height=dp(44), spacing=dp(8))
-        self.group_name_input = TextInput(hint_text='新群名称', multiline=False)
+        self.group_name_input = TextInput(hint_text='新团队名称', multiline=False)
         grp_btn = Button(text='创建群', size_hint=(None, 1), width=dp(90))
         grp_btn.bind(on_press=lambda *_: self._create_group())
         grp_row.add_widget(self.group_name_input)
@@ -469,7 +556,7 @@ class ServerAdminScreen(Screen):
     def _create_group(self):
         name = (self.group_name_input.text or '').strip()
         if not name:
-            self._popup('提示', '请输入群名称')
+            self._popup('提示', '请输入团队名称')
             return
 
         def work():

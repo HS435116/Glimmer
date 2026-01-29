@@ -205,19 +205,59 @@ class Database:
     
     def add_attendance(self, user_id, username, status, location, notes=""):
 
-        """添加打卡记录"""
+        """添加打卡记录。
+
+        说明：记录默认 `server_synced=False`，用于在服务器恢复连接后自动补传历史数据。
+        """
         record_id = str(uuid.uuid4())
         timestamp = datetime.now().isoformat()
-        
-        self.attendance_store.put(record_id,
-                                 user_id=user_id,
-                                 username=username,
-                                 status=status,
-                                 location=location,
-                                 notes=notes,
-                                 timestamp=timestamp,
-                                 date=datetime.now().strftime("%Y-%m-%d"))
+
+        self.attendance_store.put(
+            record_id,
+            user_id=user_id,
+            username=username,
+            status=status,
+            location=location,
+            notes=notes,
+            timestamp=timestamp,
+            date=datetime.now().strftime("%Y-%m-%d"),
+            server_synced=False,
+            server_synced_at='',
+            server_sync_error='',
+        )
         return record_id
+
+    def mark_attendance_synced(self, record_id: str, synced: bool = True, error: str = ''):
+        """标记某条打卡记录是否已同步到服务器（离线补传用）。"""
+        try:
+            if not record_id or not self.attendance_store.exists(record_id):
+                return
+            record = self.attendance_store.get(record_id)
+            record['server_synced'] = bool(synced)
+            record['server_synced_at'] = datetime.now().isoformat(timespec='seconds') if synced else ''
+            record['server_sync_error'] = str(error or '')[:300]
+            self.attendance_store.put(record_id, **record)
+        except Exception:
+            return
+
+    def get_unsynced_attendance(self, username: str, limit: int = 50) -> list[dict]:
+        """获取未同步到服务器的打卡记录（按时间从旧到新）。"""
+        try:
+            items = []
+            for key in self.attendance_store.keys():
+                record = self.attendance_store.get(key)
+                if record.get('username') != username:
+                    continue
+                if bool(record.get('server_synced')):
+                    continue
+                record = dict(record)
+                record['record_id'] = key
+                items.append(record)
+            items.sort(key=lambda x: x.get('timestamp') or '')
+            return items[: int(limit or 50)]
+        except Exception:
+            return []
+
     
     def get_user_attendance(self, username):
         """获取用户的打卡记录"""
@@ -557,6 +597,11 @@ class LoginScreen(Screen):
             self.update_announcement()
         except Exception:
             pass
+
+        # 登录页也周期性刷新“全局公告/版本信息”，确保工程师发布后尽快可见
+        if not getattr(self, '_public_cfg_ev', None):
+            self._public_cfg_ev = Clock.schedule_interval(lambda *_: self.refresh_server_public_announcement(), 15)
+
 
 
 
@@ -954,14 +999,25 @@ class LoginScreen(Screen):
         self.manager.current = 'register'
     
     def show_popup(self, title, message):
-        """显示提示弹窗"""
-        popup = Popup(title=title,
-                     content=Label(text=message),
-                     size_hint=(0.8, 0.4),
-                     background_color=(0.0667, 0.149, 0.3098, 1),
-                     background='')
+        """显示提示弹窗（自动换行/对齐，背景色与首页一致）"""
+        msg = str(message or '')
+        align = 'left' if ('\n' in msg or len(msg) > 18) else 'center'
+        valign = 'top' if align == 'left' else 'middle'
 
+        content = BoxLayout(orientation='vertical', spacing=dp(10), padding=dp(18))
+        label = Label(text=msg, color=(1, 1, 1, 1), halign=align, valign=valign)
+        label.bind(size=lambda instance, value: setattr(instance, 'text_size', value))
+        content.add_widget(label)
+
+        popup = Popup(
+            title=str(title or ''),
+            content=content,
+            size_hint=(0.85, 0.45),
+            background_color=(0.0667, 0.149, 0.3098, 1),
+            background=''
+        )
         popup.open()
+
 
 
 
@@ -1223,14 +1279,25 @@ class RegisterScreen(Screen):
 
     
     def show_popup(self, title, message):
-        """显示提示弹窗"""
-        popup = Popup(title=title,
-                     content=Label(text=message),
-                     size_hint=(0.8, 0.4),
-                     background_color=(0.0667, 0.149, 0.3098, 1),
-                     background='')
+        """显示提示弹窗（自动换行/对齐，背景色与首页一致）"""
+        msg = str(message or '')
+        align = 'left' if ('\n' in msg or len(msg) > 18) else 'center'
+        valign = 'top' if align == 'left' else 'middle'
 
+        content = BoxLayout(orientation='vertical', spacing=dp(10), padding=dp(18))
+        label = Label(text=msg, color=(1, 1, 1, 1), halign=align, valign=valign)
+        label.bind(size=lambda instance, value: setattr(instance, 'text_size', value))
+        content.add_widget(label)
+
+        popup = Popup(
+            title=str(title or ''),
+            content=content,
+            size_hint=(0.85, 0.45),
+            background_color=(0.0667, 0.149, 0.3098, 1),
+            background=''
+        )
         popup.open()
+
 
 
 

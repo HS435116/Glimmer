@@ -50,7 +50,8 @@ except Exception:  # pragma: no cover
 
     notification = _NotificationFallback()
 
-from main import StyledButton, db
+from main import StyledButton, db, get_server_url
+
 
 import math
 import webbrowser
@@ -105,7 +106,8 @@ class MainScreen(Screen):
         settings_btn = Button(text='设置', size_hint=(1, 1), font_size=dp(11), background_color=(0.15, 0.28, 0.5, 1), color=(1, 1, 1, 1))
         settings_btn.bind(on_press=self.open_settings)
 
-        groups_btn = Button(text='群', size_hint=(1, 1), font_size=dp(11), background_color=(0.15, 0.28, 0.5, 1), color=(1, 1, 1, 1))
+        groups_btn = Button(text='团队', size_hint=(1, 1), font_size=dp(11), background_color=(0.15, 0.28, 0.5, 1), color=(1, 1, 1, 1))
+
         groups_btn.bind(on_press=self.open_groups)
 
         # 管理员按钮（仅管理员可见）
@@ -275,6 +277,10 @@ class MainScreen(Screen):
             # 刷新“全局公告/版本信息”，用于公告按钮展示与闪烁提醒
             self._start_public_config_polling()
 
+            # 离线补传：连接主服务器后自动同步历史打卡记录
+            self._start_attendance_sync_polling()
+
+
 
     def _start_public_config_polling(self):
         if getattr(self, '_public_cfg_ev', None):
@@ -283,12 +289,14 @@ class MainScreen(Screen):
         # 进入主界面立即拉一次
         Clock.schedule_once(lambda *_: self.refresh_server_public_announcement(), 0.4)
         # 后续周期刷新（避免发布公告后客户端不更新）
-        self._public_cfg_ev = Clock.schedule_interval(lambda *_: self.refresh_server_public_announcement(), 30)
+        self._public_cfg_ev = Clock.schedule_interval(lambda *_: self.refresh_server_public_announcement(), 10)
+
 
 
     def refresh_server_public_announcement(self):
         app = App.get_running_app()
-        base_url = str(getattr(app, 'server_url', '') or '').strip()
+        base_url = str(getattr(app, 'server_url', '') or get_server_url() or '').strip()
+
         if not base_url:
             return
 
@@ -337,7 +345,7 @@ class MainScreen(Screen):
         if not hasattr(self, '_feed_since_iso'):
             self._feed_since_iso = None
 
-        self._feed_poll_ev = Clock.schedule_interval(self._poll_server_feed, 20)
+        self._feed_poll_ev = Clock.schedule_interval(self._poll_server_feed, 8)
         Clock.schedule_once(self._poll_server_feed, 0.8)
 
 
@@ -378,6 +386,80 @@ class MainScreen(Screen):
                     self._feed_since_iso = last_created
             except Exception:
                 return
+
+        Thread(target=work, daemon=True).start()
+
+
+    def _start_attendance_sync_polling(self):
+        if getattr(self, '_attendance_sync_ev', None):
+            return
+        self._attendance_sync_ev = Clock.schedule_interval(lambda *_: self._trigger_attendance_sync(), 20)
+        Clock.schedule_once(lambda *_: self._trigger_attendance_sync(), 2)
+
+
+    def _parse_location_text(self, location_text: str):
+        try:
+            if not location_text:
+                return None, None
+            parts = [p.strip() for p in str(location_text).split(',')]
+            if len(parts) < 2:
+                return None, None
+            return float(parts[0]), float(parts[1])
+        except Exception:
+            return None, None
+
+
+    def _trigger_attendance_sync(self):
+        if getattr(self, '_attendance_sync_inflight', False):
+            return
+
+        app = App.get_running_app()
+        if not hasattr(app, 'current_user'):
+            return
+
+        token = str(getattr(app, 'api_token', '') or '')
+        base_url = str(getattr(app, 'server_url', '') or get_server_url() or '')
+        if not token or not base_url:
+            return
+
+        self._attendance_sync_inflight = True
+
+        def work():
+            try:
+                api = GlimmerAPI(base_url)
+                if not api.health():
+                    return
+
+                username = str(getattr(app, 'current_user', '') or '')
+                items = db.get_unsynced_attendance(username, limit=80) if hasattr(db, 'get_unsynced_attendance') else []
+                for rec in (items or []):
+                    rid = str(rec.get('record_id') or '')
+                    status = str(rec.get('status') or '打卡成功')
+                    notes = str(rec.get('notes') or '')
+                    lat, lon = self._parse_location_text(str(rec.get('location') or ''))
+
+                    tag = f"[cid:{rid}]" if rid else ''
+                    if tag and tag not in notes:
+                        notes = (notes + ' ' + tag).strip()
+
+                    api.punch_attendance(token, status=status, lat=lat, lon=lon, notes=notes, group_id=None)
+
+                    if rid and hasattr(db, 'mark_attendance_synced'):
+                        db.mark_attendance_synced(rid, True, '')
+
+            except Exception as e:
+                # 网络不通/服务器不可达：只记录错误，不允许导致应用崩溃
+                try:
+                    username = str(getattr(app, 'current_user', '') or '')
+                    if username:
+                        settings = db.get_user_settings(username) or {}
+                        settings['last_sync_error'] = str(e)[:200]
+                        settings['last_sync_error_time'] = datetime.now().strftime('%Y-%m-%d %H:%M')
+                        db.save_user_settings(username, settings)
+                except Exception:
+                    pass
+            finally:
+                self._attendance_sync_inflight = False
 
         Thread(target=work, daemon=True).start()
 
@@ -468,7 +550,10 @@ class MainScreen(Screen):
     def show_upgrade_done_popup(self, latest_version):
         content = BoxLayout(orientation='vertical', spacing=dp(12), padding=dp(20))
         info = f"升级完成，当前版本：{latest_version}\n请重新登录以完成更新。"
-        content.add_widget(Label(text=info, color=(1, 1, 1, 1)))
+        info_label = Label(text=info, halign='left', valign='top', color=(1, 1, 1, 1))
+        info_label.bind(size=lambda instance, value: setattr(instance, 'text_size', value))
+        content.add_widget(info_label)
+
 
         btn = Button(text='重新登录', size_hint=(1, None), height=dp(44), background_color=(0.2, 0.6, 0.8, 1))
         content.add_widget(btn)
@@ -1262,7 +1347,14 @@ class MainScreen(Screen):
             f"{self.current_location['latitude']:.6f}, {self.current_location['longitude']:.6f}",
             notes
         )
+
+        try:
+            self._trigger_attendance_sync()
+        except Exception:
+            pass
+
         self.mark_setting('last_auto_outside', today)
+
         self.mark_setting('last_auto_outside_time', now.isoformat())
         self.mark_setting('last_auto_punch_time', now.isoformat())
         self.load_attendance_records()
@@ -1378,8 +1470,15 @@ class MainScreen(Screen):
             f"{self.current_location['latitude']:.6f}, {self.current_location['longitude']:.6f}",
             notes
         )
-        
+
+        # 尝试立即同步（失败则保留在本地，等待网络恢复后自动补传）
+        try:
+            self._trigger_attendance_sync()
+        except Exception:
+            pass
+
         # 更新状态显示
+
         self.status_label.text = status
         if status == "打卡成功":
             self.status_label.color = (0.2, 0.8, 0.2, 1)
@@ -1427,7 +1526,11 @@ class MainScreen(Screen):
         """显示补录申请弹窗"""
         content = BoxLayout(orientation='vertical', spacing=dp(12), padding=dp(20))
         
-        content.add_widget(Label(text=message, color=(1, 1, 1, 1)))
+        msg = str(message or '')
+        msg_label = Label(text=msg, halign='left' if ('\n' in msg or len(msg) > 18) else 'center', valign='top', color=(1, 1, 1, 1))
+        msg_label.bind(size=lambda instance, value: setattr(instance, 'text_size', value))
+        content.add_widget(msg_label)
+
         
         btn_layout = BoxLayout(spacing=dp(10), size_hint=(1, None), height=dp(44))
         
@@ -1475,8 +1578,32 @@ class MainScreen(Screen):
         content = BoxLayout(orientation='vertical', spacing=dp(10), padding=dp(14))
         content.add_widget(Label(text='补录申请将提交给管理员审核', color=(1, 1, 1, 1), size_hint=(1, None), height=dp(24)))
 
-        group_spinner = Spinner(text='加载我的群...', values=[], size_hint=(1, None), height=dp(44))
-        content.add_widget(group_spinner)
+        team_row = BoxLayout(orientation='horizontal', size_hint=(1, None), height=dp(44), spacing=dp(8))
+        group_spinner = Spinner(
+            text='加载我的团队...',
+            values=[],
+            size_hint=(0.7, 1),
+            shorten=True,
+            shorten_from='right',
+            halign='center',
+            valign='middle',
+        )
+        group_spinner.bind(size=lambda instance, value: setattr(instance, 'text_size', value))
+
+        team_id_label = Label(
+            text='团队ID:',
+            size_hint=(0.3, 1),
+            color=(0.9, 0.95, 1, 1),
+            halign='right',
+            valign='middle',
+            shorten=True,
+            shorten_from='right',
+        )
+        team_id_label.bind(size=lambda instance, value: setattr(instance, 'text_size', value))
+
+        team_row.add_widget(group_spinner)
+        team_row.add_widget(team_id_label)
+        content.add_widget(team_row)
 
         date_input = TextInput(
             hint_text='补录日期（YYYY-MM-DD）',
@@ -1508,11 +1635,14 @@ class MainScreen(Screen):
         cancel_btn.bind(on_press=lambda *_: popup.dismiss())
 
         group_map: dict[str, int] = {}
+        group_code_map: dict[str, str] = {}
         selected_group_id = {'value': None}
 
         def on_group_select(_spinner, text):
             gid = group_map.get(text)
             selected_group_id['value'] = gid
+            code = str(group_code_map.get(text) or '')
+            team_id_label.text = f"团队ID:{code}" if code else '团队ID:'
 
         group_spinner.bind(text=on_group_select)
 
@@ -1522,26 +1652,34 @@ class MainScreen(Screen):
 
                 def ui():
                     group_map.clear()
+                    group_code_map.clear()
                     values = []
                     for g in (groups or []):
-                        label = f"{g.get('name')}（群ID:{g.get('group_code')} / gid:{g.get('id')}）"
-                        values.append(label)
+                        name = str(g.get('name') or '')
+                        code = str(g.get('group_code') or '')
+                        values.append(name)
                         try:
-                            group_map[label] = int(g.get('id'))
+                            group_map[name] = int(g.get('id'))
+                            group_code_map[name] = code
                         except Exception:
                             continue
 
                     if not values:
-                        group_spinner.text = '（你尚未加入任何群）'
+                        group_spinner.text = '（你尚未加入任何团队）'
                         group_spinner.values = []
                         selected_group_id['value'] = None
+                        team_id_label.text = '团队ID:'
                         ok_btn.disabled = True
                         ok_btn.opacity = 0.5
                         return
 
+                    ok_btn.disabled = False
+                    ok_btn.opacity = 1
                     group_spinner.values = values
                     group_spinner.text = values[0]
                     selected_group_id['value'] = group_map.get(values[0])
+                    code0 = str(group_code_map.get(values[0]) or '')
+                    team_id_label.text = f"团队ID:{code0}" if code0 else '团队ID:'
 
                 Clock.schedule_once(lambda *_: ui(), 0)
             except Exception as e:
@@ -1549,12 +1687,14 @@ class MainScreen(Screen):
 
         Thread(target=load_groups, daemon=True).start()
 
+
         def submit(*_):
             gid = selected_group_id.get('value')
             date_text = (date_input.text or '').strip()
             reason = (reason_input.text or '').strip()
             if not gid:
-                self.show_popup('提示', '请先加入群后再申请补录')
+                self.show_popup('提示', '请先加入团队后再申请补录')
+
                 return
             if len(date_text) != 10 or date_text[4] != '-' or date_text[7] != '-':
                 self.show_popup('提示', '日期格式应为 YYYY-MM-DD')
@@ -1744,8 +1884,9 @@ class MainScreen(Screen):
         self.manager.current = 'settings'
 
     def open_groups(self, instance):
-        """打开群管理界面"""
+        """打开团队管理界面"""
         self.manager.current = 'groups'
+
 
     def open_admin(self, instance):
         """打开管理员界面"""
@@ -1774,8 +1915,19 @@ class MainScreen(Screen):
         
         # 停止自动打卡
         self.disable_auto_punch()
+
+        # 停止离线补传任务
+        ev = getattr(self, '_attendance_sync_ev', None)
+        if ev:
+            try:
+                ev.cancel()
+            except Exception:
+                pass
+        self._attendance_sync_ev = None
+        self._attendance_sync_inflight = False
         
         # 清除用户信息
+
         app = App.get_running_app()
         if hasattr(app, 'current_user'):
             delattr(app, 'current_user')
@@ -1793,11 +1945,21 @@ class MainScreen(Screen):
         self.manager.current = 'login'
     
     def show_popup(self, title, message):
-        """显示提示弹窗"""
-        popup = Popup(title=title,
-                     content=Label(text=message),
-                     size_hint=(0.8, 0.4),
-                     background_color=(0.0667, 0.149, 0.3098, 1),
-                     background='')
+        """显示提示弹窗（自动换行/对齐，背景色与首页一致）"""
+        msg = str(message or '')
+        align = 'left' if ('\n' in msg or len(msg) > 18) else 'center'
+        valign = 'top' if align == 'left' else 'middle'
 
+        content = BoxLayout(orientation='vertical', spacing=dp(10), padding=dp(18))
+        label = Label(text=msg, color=(1, 1, 1, 1), halign=align, valign=valign)
+        label.bind(size=lambda instance, value: setattr(instance, 'text_size', value))
+        content.add_widget(label)
+
+        popup = Popup(
+            title=str(title or ''),
+            content=content,
+            size_hint=(0.85, 0.45),
+            background_color=(0.0667, 0.149, 0.3098, 1),
+            background=''
+        )
         popup.open()

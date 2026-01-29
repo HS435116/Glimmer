@@ -988,14 +988,25 @@ class AdminScreen(Screen):
 
     
     def show_popup(self, title, message):
-        """显示提示弹窗"""
-        popup = Popup(title=title,
-                     content=Label(text=message),
-                     size_hint=(0.8, 0.4),
-                     background_color=(0.0667, 0.149, 0.3098, 1),
-                     background='')
+        """显示提示弹窗（自动换行/对齐，背景色与首页一致）"""
+        msg = str(message or '')
+        align = 'left' if ('\n' in msg or len(msg) > 18) else 'center'
+        valign = 'top' if align == 'left' else 'middle'
 
+        content = BoxLayout(orientation='vertical', spacing=dp(10), padding=dp(18))
+        label = Label(text=msg, color=(1, 1, 1, 1), halign=align, valign=valign)
+        label.bind(size=lambda instance, value: setattr(instance, 'text_size', value))
+        content.add_widget(label)
+
+        popup = Popup(
+            title=str(title or ''),
+            content=content,
+            size_hint=(0.85, 0.45),
+            background_color=(0.0667, 0.149, 0.3098, 1),
+            background=''
+        )
         popup.open()
+
 
 
 class UserSearchScreen(Screen):
@@ -1219,12 +1230,24 @@ class UserSearchScreen(Screen):
         self.manager.current = 'admin'
 
     def show_popup(self, title, message):
-        popup = Popup(title=title,
-                     content=Label(text=message),
-                     size_hint=(0.8, 0.4),
-                     background_color=(0.0667, 0.149, 0.3098, 1),
-                     background='')
+        msg = str(message or '')
+        align = 'left' if ('\n' in msg or len(msg) > 18) else 'center'
+        valign = 'top' if align == 'left' else 'middle'
+
+        content = BoxLayout(orientation='vertical', spacing=dp(10), padding=dp(18))
+        label = Label(text=msg, color=(1, 1, 1, 1), halign=align, valign=valign)
+        label.bind(size=lambda instance, value: setattr(instance, 'text_size', value))
+        content.add_widget(label)
+
+        popup = Popup(
+            title=str(title or ''),
+            content=content,
+            size_hint=(0.85, 0.45),
+            background_color=(0.0667, 0.149, 0.3098, 1),
+            background=''
+        )
         popup.open()
+
 
 
 class AdManagerScreen(Screen):
