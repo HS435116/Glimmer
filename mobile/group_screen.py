@@ -13,15 +13,58 @@ from kivy.uix.scrollview import ScrollView
 from kivy.uix.popup import Popup
 from kivy.clock import Clock
 from kivy.metrics import dp
+from kivy.graphics import Color, Rectangle, RoundedRectangle
 
 from glimmer_api import GlimmerAPI, GlimmerAPIError
+from main import db
+
 
 
 class GroupScreen(Screen):
+    def _short_team_name(self, name: str, max_len: int = 10) -> str:
+        s = str(name or '')
+        max_len = int(max_len or 10)
+        if len(s) <= max_len:
+            return s
+        if max_len <= 1:
+            return '.'
+        return s[: max_len - 1] + '.'
+
+    def _make_tag(self, text: str):
+        label = Label(
+            text=str(text or ''),
+            color=(1, 1, 1, 1),
+            size_hint=(1, None),
+            height=dp(28),
+            halign='center',
+            valign='middle',
+            shorten=True,
+            shorten_from='right',
+        )
+        label.bind(size=lambda instance, value: setattr(instance, 'text_size', value))
+        with label.canvas.before:
+            Color(0.12, 0.2, 0.35, 0.95)
+            rect = RoundedRectangle(pos=label.pos, size=label.size, radius=[8])
+        label.bind(pos=lambda instance, value: setattr(rect, 'pos', value))
+        label.bind(size=lambda instance, value: setattr(rect, 'size', value))
+        return label
+
+    def update_bg(self, *args):
+        self.bg_rect.pos = self.pos
+        self.bg_rect.size = self.size
+
     def __init__(self, **kwargs):
+
+
         super().__init__(**kwargs)
 
+        with self.canvas.before:
+            Color(0.0667, 0.149, 0.3098, 1)
+            self.bg_rect = Rectangle(pos=self.pos, size=self.size)
+        self.bind(pos=self.update_bg, size=self.update_bg)
+
         root = BoxLayout(orientation='vertical', spacing=dp(10), padding=dp(12))
+
 
         title = Label(text='团队管理', font_size=dp(18), bold=True, size_hint=(1, None), height=dp(34), color=(1, 1, 1, 1))
 
@@ -99,10 +142,21 @@ class GroupScreen(Screen):
 
 
     def go_back(self):
+        # 返回即清空动态列表，避免重复进入后内容堆积
+        try:
+            self.list_layout.clear_widgets()
+        except Exception:
+            pass
+        try:
+            self.info_label.text = ''
+        except Exception:
+            pass
+
         try:
             self.manager.current = 'main'
         except Exception:
             pass
+
 
     def logout(self):
         """退出登录"""
@@ -142,9 +196,11 @@ class GroupScreen(Screen):
                 Clock.schedule_once(lambda *_: (self.show_popup('申请加入团队', msg), self.refresh()), 0)
 
             except Exception as e:
-                Clock.schedule_once(lambda *_: self.show_popup('错误', str(e)), 0)
+                err_msg = str(e)
+                Clock.schedule_once(lambda *_: self.show_popup('错误', err_msg), 0)
 
         Thread(target=work, daemon=True).start()
+
 
     def refresh(self, *_):
         self.info_label.text = '正在刷新...'
@@ -169,39 +225,29 @@ class GroupScreen(Screen):
                         name = str(g.get('name') or '')
                         code = str(g.get('group_code') or '')
 
-                        row = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(8))
+                        row = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(8))
 
-                        text_row = BoxLayout(orientation='horizontal', spacing=dp(6))
-                        name_label = Label(
-                            text=name,
-                            size_hint=(0.7, 1),
-                            color=(0.9, 0.95, 1, 1),
+                        display_name = self._short_team_name(name, 10)
+                        label_text = f"{display_name}  团队ID:{code}" if code else display_name
+                        detail_btn = Button(
+                            text=label_text,
+                            size_hint=(1, 1),
+                            background_color=(0.12, 0.2, 0.35, 0.95),
+                            color=(0.95, 0.97, 1, 1),
                             halign='center',
                             valign='middle',
                             shorten=True,
                             shorten_from='right',
                         )
-                        name_label.bind(size=lambda instance, value: setattr(instance, 'text_size', value))
+                        detail_btn.bind(size=lambda instance, value: setattr(instance, 'text_size', value))
+                        detail_btn.bind(on_press=lambda _btn, _gid=gid, _code=code, _name=name: self.open_team_detail(_gid, _code, _name))
+                        row.add_widget(detail_btn)
 
-                        id_label = Label(
-                            text=(f"ID:{code}" if code else ''),
-                            size_hint=(0.3, 1),
-                            color=(0.82, 0.88, 0.95, 1),
-                            halign='right',
-                            valign='middle',
-                            shorten=True,
-                            shorten_from='right',
-                        )
-                        id_label.bind(size=lambda instance, value: setattr(instance, 'text_size', value))
-
-                        text_row.add_widget(name_label)
-                        text_row.add_widget(id_label)
-                        row.add_widget(text_row)
-
-                        leave_btn = Button(text='退出团队', size_hint=(None, 1), width=dp(80))
+                        leave_btn = Button(text='退出团队', size_hint=(None, 1), width=dp(84))
                         leave_btn.bind(on_press=lambda _btn, _gid=gid: self.leave_group(_gid))
                         row.add_widget(leave_btn)
                         self.list_layout.add_widget(row)
+
 
 
                     self.list_layout.add_widget(Label(text='入队申请记录：', size_hint_y=None, height=dp(26), color=(1, 1, 1, 1)))
@@ -225,6 +271,172 @@ class GroupScreen(Screen):
 
         Thread(target=work, daemon=True).start()
 
+    def open_team_detail(self, group_id: int, group_code: str, group_name: str):
+        """团队详情弹窗：成员数/成员列表（点成员进入本机聊天页）"""
+        group_id = int(group_id or 0)
+        code = str(group_code or '')
+        name = str(group_name or '')
+
+        app = App.get_running_app()
+        my_user = str(getattr(app, 'current_user', '') or '')
+        my_profile = db.get_user_profile(my_user) if my_user else {}
+
+        content = BoxLayout(orientation='vertical', spacing=dp(10), padding=dp(14))
+
+        title = Label(
+            text=f"{name}\n团队ID:{code}" if code else name,
+            size_hint=(1, None),
+            height=dp(44),
+            color=(1, 1, 1, 1),
+            halign='center',
+            valign='middle',
+        )
+        title.bind(size=lambda instance, value: setattr(instance, 'text_size', value))
+        content.add_widget(title)
+
+        # 当前用户资料（本地档案）
+        me_uid = str(my_profile.get('user_id') or '')
+        me_real = str(my_profile.get('real_name') or '')
+        me_phone = str(my_profile.get('phone') or '')
+
+        avatar_row = BoxLayout(size_hint=(1, None), height=dp(64), spacing=dp(10))
+        avatar_text = (me_real or my_user or '我')[:1]
+        avatar_btn = Button(
+            text=avatar_text,
+            size_hint=(None, None),
+            size=(dp(54), dp(54)),
+            background_color=(0.15, 0.28, 0.5, 1),
+            color=(1, 1, 1, 1),
+        )
+        name_label = Label(
+            text=f"{me_real or my_user or '未填写'}",
+            color=(0.95, 0.97, 1, 1),
+            halign='left',
+            valign='middle',
+            shorten=True,
+            shorten_from='right',
+        )
+        name_label.bind(size=lambda instance, value: setattr(instance, 'text_size', value))
+        avatar_row.add_widget(avatar_btn)
+        avatar_row.add_widget(name_label)
+        content.add_widget(avatar_row)
+
+        tag_grid = GridLayout(cols=2, spacing=dp(6), size_hint_y=None)
+        tag_grid.bind(minimum_height=tag_grid.setter('height'))
+        tag_grid.add_widget(self._make_tag(f"用户ID:{me_uid or '未知'}"))
+        tag_grid.add_widget(self._make_tag(f"姓名:{me_real or my_user or '未填写'}"))
+        tag_grid.add_widget(self._make_tag(f"手机号:{me_phone or '未填写'}"))
+        members_count_label = self._make_tag('成员数:加载中...')
+        tag_grid.add_widget(members_count_label)
+        content.add_widget(tag_grid)
+
+        scroll = ScrollView(size_hint=(1, 1), bar_width=dp(2))
+
+        lst = GridLayout(cols=1, spacing=dp(6), size_hint_y=None)
+        lst.bind(minimum_height=lst.setter('height'))
+        scroll.add_widget(lst)
+        content.add_widget(scroll)
+
+        btn_row = BoxLayout(size_hint=(1, None), height=dp(44), spacing=dp(10))
+        close_btn = Button(text='返回', background_color=(0.6, 0.6, 0.6, 1))
+        btn_row.add_widget(close_btn)
+        content.add_widget(btn_row)
+
+        popup = Popup(
+            title='团队详情',
+            content=content,
+            size_hint=(0.92, 0.85),
+            background_color=(0.0667, 0.149, 0.3098, 1),
+            background='',
+        )
+        close_btn.bind(on_press=lambda *_: popup.dismiss())
+        popup.open()
+
+        def open_chat(peer_user_id: int, peer_username: str):
+            try:
+                app = App.get_running_app()
+                app.chat_peer = {'user_id': int(peer_user_id), 'username': str(peer_username or '')}
+                app.chat_group = {'group_id': group_id, 'group_code': code, 'group_name': name}
+            except Exception:
+                pass
+            try:
+                popup.dismiss()
+            except Exception:
+                pass
+            try:
+                self.manager.current = 'chat'
+            except Exception:
+                self.show_popup('提示', '聊天页面未就绪')
+
+        def work():
+            try:
+                token = self._get_token()
+                api = self._get_api()
+
+                members = []
+                if hasattr(api, 'group_members'):
+                    members = api.group_members(token, group_id)
+                else:
+                    # 兼容：若服务器不支持普通成员列表，则尝试管理员接口（可能会 403）
+                    try:
+                        members = api.list_group_members(token, group_id)
+                    except Exception:
+                        members = []
+
+                try:
+                    members = sorted((members or []), key=lambda x: str(x.get('joined_at') or ''))
+                except Exception:
+                    members = members or []
+
+                def ui():
+                    lst.clear_widgets()
+                    members_count_label.text = f"成员数:{len(members or [])}"
+                    if not members:
+                        lst.add_widget(Label(text='（暂无成员信息或无权限）', size_hint_y=None, height=dp(26), color=(0.9, 0.95, 1, 1)))
+                        return
+
+                    for m in (members or []):
+
+                        uid = int(m.get('user_id') or 0)
+                        uname = str(m.get('username') or '')
+                        row = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(8))
+
+                        avatar = Button(
+                            text=(uname[:1] if uname else 'U'),
+                            size_hint=(None, 1),
+                            width=dp(44),
+                            background_color=(0.15, 0.28, 0.5, 1),
+                            color=(1, 1, 1, 1),
+                        )
+                        avatar.bind(on_press=lambda _b, _uid=uid, _uname=uname: open_chat(_uid, _uname))
+
+                        name_btn = Button(
+                            text=f"{uname}  ID:{uid}" if uid else uname,
+                            size_hint=(1, 1),
+                            background_color=(0.12, 0.2, 0.35, 0.95),
+                            color=(0.95, 0.97, 1, 1),
+                            halign='left',
+                            valign='middle',
+                            shorten=True,
+                            shorten_from='right',
+                        )
+                        name_btn.bind(size=lambda instance, value: setattr(instance, 'text_size', value))
+                        name_btn.bind(on_press=lambda _b, _uid=uid, _uname=uname: open_chat(_uid, _uname))
+
+                        row.add_widget(avatar)
+                        row.add_widget(name_btn)
+                        lst.add_widget(row)
+
+                Clock.schedule_once(lambda *_: ui(), 0)
+
+            except Exception as e:
+                err_msg = str(e)
+                Clock.schedule_once(lambda *_: (setattr(members_count_label, 'text', '团队成员：加载失败'), self.show_popup('错误', err_msg)), 0)
+
+
+        Thread(target=work, daemon=True).start()
+
+
     def leave_group(self, group_id: int):
         def work():
             try:
@@ -234,6 +446,9 @@ class GroupScreen(Screen):
                 Clock.schedule_once(lambda *_: (self.show_popup('提示', '已退出团队'), self.refresh()), 0)
 
             except Exception as e:
-                Clock.schedule_once(lambda *_: self.show_popup('错误', str(e)), 0)
+                err_msg = str(e)
+                Clock.schedule_once(lambda *_: self.show_popup('错误', err_msg), 0)
 
         Thread(target=work, daemon=True).start()
+
+

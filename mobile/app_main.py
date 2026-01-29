@@ -371,9 +371,12 @@ class AttendanceApp(App):
                 from admin_screen import AdminScreen, AdManagerScreen, UserSearchScreen
                 from group_screen import GroupScreen
                 from server_admin_screen import ServerAdminScreen
+                from chat_screen import ChatScreen
+                from profile_screen import ProfileScreen
 
 
                 self._imported_screens = {
+
 
                     'LoginScreen': LoginScreen,
                     'RegisterScreen': RegisterScreen,
@@ -384,7 +387,10 @@ class AttendanceApp(App):
                     'AdManagerScreen': AdManagerScreen,
                     'GroupScreen': GroupScreen,
                     'ServerAdminScreen': ServerAdminScreen,
+                    'ChatScreen': ChatScreen,
+                    'ProfileScreen': ProfileScreen,
                 }
+
 
 
                 self._diag_event('init_import_ok')
@@ -409,10 +415,13 @@ class AttendanceApp(App):
                 ('main', screens['MainScreen'](name='main')),
                 ('settings', screens['SettingsScreen'](name='settings')),
                 ('groups', screens['GroupScreen'](name='groups')),
+                ('chat', screens['ChatScreen'](name='chat')),
+                ('profile', screens['ProfileScreen'](name='profile')),
                 ('server_admin', screens['ServerAdminScreen'](name='server_admin')),
                 ('admin', screens['AdminScreen'](name='admin')),
 
                 ('user_search', screens['UserSearchScreen'](name='user_search')),
+
                 ('ad_manager', screens['AdManagerScreen'](name='ad_manager')),
             ]
 

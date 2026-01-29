@@ -692,7 +692,7 @@ class AdminScreen(Screen):
             self.announcement_info_label.text = '当前公告：未发布'
 
     def open_announcement_popup(self, instance):
-        content = BoxLayout(orientation='vertical', spacing=dp(10), padding=dp(20))
+        content = BoxLayout(orientation='vertical', spacing=dp(12), padding=dp(20))
         display_time = f" {self.current_announcement_time}" if self.current_announcement_time else ''
         if self.current_announcement:
             info_text = f"当前公告：{self.current_announcement}{display_time}"
@@ -702,10 +702,18 @@ class AdminScreen(Screen):
         info_label.bind(size=lambda instance, value: setattr(instance, 'text_size', value))
         content.add_widget(info_label)
 
-        row = BoxLayout(size_hint=(1, None), height=dp(70), spacing=dp(8))
-        row.add_widget(Label(text='公告内容', size_hint=(0.28, 1), font_size=dp(12), color=(1, 1, 1, 1)))
-        announcement_input = TextInput(multiline=True, text=self.current_announcement, hint_text='请输入公告内容', font_size=dp(12), background_color=(0.95, 0.97, 1, 1), foreground_color=(0.1, 0.15, 0.25, 1))
-        row.add_widget(announcement_input)
+        content.add_widget(Label(text='公告内容', size_hint=(1, None), height=dp(22), font_size=dp(12), color=(1, 1, 1, 1)))
+        announcement_input = TextInput(
+            multiline=True,
+            text=self.current_announcement,
+            hint_text='请输入公告内容',
+            font_size=dp(12),
+            size_hint=(1, None),
+            height=dp(160),
+            background_color=(0.95, 0.97, 1, 1),
+            foreground_color=(0.1, 0.15, 0.25, 1)
+        )
+        content.add_widget(announcement_input)
 
         btn_layout = BoxLayout(size_hint=(1, None), height=dp(44), spacing=dp(10))
         publish_btn = Button(text='发布公告', background_color=(0.2, 0.6, 0.8, 1))
@@ -713,14 +721,14 @@ class AdminScreen(Screen):
         btn_layout.add_widget(publish_btn)
         btn_layout.add_widget(cancel_btn)
 
-        content.add_widget(row)
         content.add_widget(btn_layout)
 
 
-        popup = Popup(title='公告发布', content=content, size_hint=(0.9, 0.5), background_color=(0.0667, 0.149, 0.3098, 1), background='')
+        popup = Popup(title='公告发布', content=content, size_hint=(0.9, 0.6), background_color=(0.0667, 0.149, 0.3098, 1), background='')
         publish_btn.bind(on_press=lambda x: self.publish_announcement_from_popup(announcement_input.text, popup))
         cancel_btn.bind(on_press=lambda x: popup.dismiss())
         popup.open()
+
 
     def publish_announcement_from_popup(self, text, popup):
         text = text.strip()
@@ -982,8 +990,13 @@ class AdminScreen(Screen):
         self.manager.current = 'login'
 
     def go_back(self, instance):
-        """返回主界面"""
+        """返回主界面（清理列表避免堆积）"""
+        try:
+            self.records_layout.clear_widgets()
+        except Exception:
+            pass
         self.manager.current = 'main'
+
 
 
     
@@ -1227,7 +1240,22 @@ class UserSearchScreen(Screen):
         self.manager.current = 'login'
 
     def go_back(self, instance):
+        # 返回即清空输入，避免重复进入残留
+        try:
+            for w in [
+                getattr(self, 'top_text_input', None),
+                getattr(self, 'top_image_input', None),
+                getattr(self, 'top_link_input', None),
+                getattr(self, 'bottom_text_input', None),
+                getattr(self, 'bottom_image_input', None),
+                getattr(self, 'bottom_link_input', None),
+            ]:
+                if w is not None and hasattr(w, 'text'):
+                    w.text = ''
+        except Exception:
+            pass
         self.manager.current = 'admin'
+
 
     def show_popup(self, title, message):
         msg = str(message or '')
@@ -1357,9 +1385,18 @@ class AdManagerScreen(Screen):
         save_btn.bind(on_press=self.save_settings)
         button_layout.add_widget(save_btn)
 
-        main_layout.add_widget(form_layout)
-        main_layout.add_widget(button_layout)
+        # 页面上下滚动：避免小屏/软键盘导致“广告位设置/保存按钮”看不到
+        scroll = ScrollView(size_hint=(1, 1), do_scroll_x=False, bar_width=dp(2))
+        scroll_box = BoxLayout(orientation='vertical', spacing=dp(10), size_hint=(1, None), padding=[0, 0, 0, dp(10)])
+        scroll_box.bind(minimum_height=scroll_box.setter('height'))
+
+        scroll_box.add_widget(form_layout)
+        scroll_box.add_widget(button_layout)
+        scroll.add_widget(scroll_box)
+
+        main_layout.add_widget(scroll)
         self.add_widget(main_layout)
+
 
         Clock.schedule_once(self.load_settings, 0.1)
 
@@ -1415,5 +1452,20 @@ class AdManagerScreen(Screen):
 
 
     def go_back(self, instance):
+        # 返回即清空输入，避免重复进入残留
+        try:
+            for w in [
+                getattr(self, 'top_text_input', None),
+                getattr(self, 'top_image_input', None),
+                getattr(self, 'top_link_input', None),
+                getattr(self, 'bottom_text_input', None),
+                getattr(self, 'bottom_image_input', None),
+                getattr(self, 'bottom_link_input', None),
+            ]:
+                if w is not None and hasattr(w, 'text'):
+                    w.text = ''
+        except Exception:
+            pass
         self.manager.current = 'admin'
+
 

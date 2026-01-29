@@ -569,12 +569,20 @@ class LoginScreen(Screen):
         
         button_layout.add_widget(login_btn)
         button_layout.add_widget(register_btn)
+
+        forgot_btn = StyledButton(text='忘记密码', background_color=(0.18, 0.62, 0.38, 1))
+        forgot_btn.bind(on_press=self.open_forgot_password)
+        button_layout.add_widget(forgot_btn)
+
         
         # 添加所有组件
         layout.add_widget(top_row)
         layout.add_widget(title_row)
+
+
         layout.add_widget(self.logo_container)
         layout.add_widget(input_layout)
+
 
         layout.add_widget(button_layout)
 
@@ -904,11 +912,12 @@ class LoginScreen(Screen):
     
     def _fallback_local_login(self, username: str, password: str, err: str | None):
         if err:
-            # 服务器不可用时给出原因，但继续尝试本地登录
+            # 服务器不在线时统一提示“维护中”，但仍继续尝试本地登录
             try:
-                self.show_popup('提示', f'服务器登录失败，已回退本地模式\n{err}')
+                self.show_popup('提示', '服务器维护中，请稍后再试。。。')
             except Exception:
                 pass
+
 
         success, result = db.validate_user(username, password)
         if success:
@@ -924,11 +933,50 @@ class LoginScreen(Screen):
                     delattr(app, 'server_url')
             except Exception:
                 pass
-            self.manager.current = 'main'
+            self._show_welcome_then_enter()
         else:
             self.show_login_failed_popup(result)
 
+    def _show_welcome_then_enter(self):
+        content = BoxLayout(orientation='vertical', spacing=dp(10), padding=dp(18))
+        title = Label(text='欢迎使用晨曦智能打卡', font_size=dp(18), bold=True, color=(1, 1, 1, 1))
+        content.add_widget(title)
+
+        # 欢迎提示窗展示 LOGO
+        try:
+            logo_path = os.path.join(os.path.dirname(__file__), 'assets', 'icon.png')
+            if os.path.exists(logo_path):
+                img = Image(source=logo_path, allow_stretch=True, keep_ratio=True, size_hint=(1, None), height=dp(160))
+                content.add_widget(img)
+        except Exception:
+            pass
+
+
+        popup = Popup(
+            title='',
+            content=content,
+            size_hint=(0.85, 0.6),
+            background_color=(0.0667, 0.149, 0.3098, 1),
+            background=''
+        )
+        popup.open()
+
+        def _goto(*_):
+            try:
+                popup.dismiss()
+            except Exception:
+                pass
+            try:
+                self.manager.current = 'main'
+            except Exception:
+                pass
+
+        Clock.schedule_once(_goto, 5)
+
+
+
     def login(self, instance):
+
 
 
         """处理登录"""
@@ -952,11 +1000,19 @@ class LoginScreen(Screen):
                 pass
 
         if server_url:
-            self.show_popup('提示', f'正在连接服务器：{server_url}')
+            # 登录页不展示具体网址，避免泄露/影响观感
 
             def work():
+
+                api = None
                 try:
                     api = get_api()
+
+                    # 服务器不在线：统一提示“维护中”
+                    if not api.health():
+                        Clock.schedule_once(lambda *_: self.show_popup('登录失败', '服务器维护中，请稍后再试。。。'), 0)
+                        return
+
                     token = api.login(username, password)
                     me = api.me(token)
                     role = str((me or {}).get('role') or 'user')
@@ -979,24 +1035,162 @@ class LoginScreen(Screen):
                     except Exception:
                         pass
 
-                    # 确保本地也有用户档案（离线可查看当月记录）
-                    if not db.get_user_record(username):
-                        db.add_user(username, password, is_admin=(role in ('admin', 'engineer')))
+                    # 本机仅缓存个人资料（不保存密码/密保答案；用户数据以服务器为准）
+                    try:
+                        profile_cache = {
+                            'username': username,
+                            'user_id': str((me or {}).get('id') or ''),
+                            'real_name': str((me or {}).get('real_name') or ''),
+                            'phone': str((me or {}).get('phone') or ''),
+                            'department': str((me or {}).get('department') or ''),
+                            'created_at': str((me or {}).get('created_at') or ''),
+                            'last_login': str((me or {}).get('last_login') or ''),
+                            'security_question': str((me or {}).get('security_question') or ''),
+                        }
+                        s = db.get_user_settings(username) or {}
+                        s['profile_cache'] = profile_cache
+                        db.save_user_settings(username, s)
+                    except Exception:
+                        pass
 
-                    Clock.schedule_once(lambda *_: setattr(self.manager, 'current', 'main'), 0)
+                    # 补齐 user_id（用于主界面显示与个人资料页）
+                    try:
+                        app.user_data['user_id'] = str((me or {}).get('id') or '')
+                    except Exception:
+                        pass
+
+
+                    Clock.schedule_once(lambda *_: self._show_welcome_then_enter(), 0)
+
+
                 except Exception as e:
-                    Clock.schedule_once(lambda *_: self._fallback_local_login(username, password, str(e)), 0)
+                    msg = '服务器维护中，请稍后再试。。。'
+                    try:
+                        if api and api.health():
+                            msg = str(e)
+                    except Exception:
+                        pass
+                    Clock.schedule_once(lambda *_, m=msg: self.show_popup('登录失败', m), 0)
+
+
 
             Thread(target=work, daemon=True).start()
             return
+
 
         self._fallback_local_login(username, password, None)
 
 
     
+    def open_forgot_password(self, instance):
+        """忘记密码：通过密保问题找回（允许未配置服务器地址时手工输入）"""
+        default_url = str(get_server_url() or '').strip()
+        if not default_url:
+            try:
+                if client_store.exists('auth'):
+                    d = client_store.get('auth') or {}
+                    default_url = str(d.get('server_url') or '').strip()
+            except Exception:
+                default_url = ''
+
+        content = BoxLayout(orientation='vertical', spacing=dp(10), padding=dp(16))
+
+        server_in = TextInput(hint_text='服务器地址（例如 http://1.2.3.4:8000）', multiline=False, size_hint=(1, None), height=dp(44), text=default_url)
+        user_in = TextInput(hint_text='用户名', multiline=False, size_hint=(1, None), height=dp(44), text=self.username_input.text.strip())
+
+        q_label = Label(text='密保问题：', color=(1, 1, 1, 1), halign='left', valign='middle', size_hint=(1, None), height=dp(30))
+        q_label.bind(size=lambda i, v: setattr(i, 'text_size', v))
+        ans_in = TextInput(hint_text='密保答案', multiline=False, size_hint=(1, None), height=dp(44))
+        new_in = TextInput(hint_text='新密码（至少6位）', password=True, multiline=False, size_hint=(1, None), height=dp(44))
+        new2_in = TextInput(hint_text='确认新密码', password=True, multiline=False, size_hint=(1, None), height=dp(44))
+
+        content.add_widget(server_in)
+        content.add_widget(user_in)
+        content.add_widget(q_label)
+
+        content.add_widget(ans_in)
+        content.add_widget(new_in)
+        content.add_widget(new2_in)
+
+        btn_row = BoxLayout(size_hint=(1, None), height=dp(44), spacing=dp(10))
+        load_btn = Button(text='加载问题', background_color=(0.85, 0.45, 0.1, 1))
+        ok_btn = Button(text='确认找回', background_color=(0.2, 0.6, 0.8, 1))
+        cancel_btn = Button(text='取消', background_color=(0.6, 0.6, 0.6, 1))
+        btn_row.add_widget(load_btn)
+        btn_row.add_widget(ok_btn)
+        btn_row.add_widget(cancel_btn)
+        content.add_widget(btn_row)
+
+        popup = Popup(title='忘记密码', content=content, size_hint=(0.9, 0.7), background_color=(0.0667, 0.149, 0.3098, 1), background='')
+        cancel_btn.bind(on_press=lambda *_: popup.dismiss())
+
+        def load_question(*_):
+            u = (user_in.text or '').strip()
+            if not u:
+                self.show_popup('提示', '请输入用户名')
+                return
+
+            def work():
+                try:
+                    url = (server_in.text or '').strip().rstrip('/')
+                    if not url:
+                        raise RuntimeError('请输入服务器地址')
+                    from glimmer_api import GlimmerAPI
+                    api = GlimmerAPI(url)
+                    if not api.health():
+                        raise RuntimeError('服务器不在线')
+                    data = api.security_question(u)
+
+                    q = str((data or {}).get('security_question') or '')
+                    Clock.schedule_once(lambda *_: setattr(q_label, 'text', f"密保问题：{q}" if q else '密保问题：未设置'), 0)
+                except Exception as e:
+                    Clock.schedule_once(lambda *_, msg=str(e): setattr(q_label, 'text', f"密保问题：加载失败（{msg}）"), 0)
+
+
+            Thread(target=work, daemon=True).start()
+
+        def submit(*_):
+            u = (user_in.text or '').strip()
+            ans = (ans_in.text or '').strip()
+            new_pwd = (new_in.text or '').strip()
+            new2_pwd = (new2_in.text or '').strip()
+            if not u or not ans or not new_pwd:
+                self.show_popup('提示', '请输入用户名、答案和新密码')
+                return
+            if len(new_pwd) < 6:
+                self.show_popup('提示', '新密码长度至少6位')
+                return
+            if new_pwd != new2_pwd:
+                self.show_popup('提示', '两次输入的新密码不一致')
+                return
+
+            def work():
+                try:
+                    url = (server_in.text or '').strip().rstrip('/')
+                    if not url:
+                        raise RuntimeError('请输入服务器地址')
+                    from glimmer_api import GlimmerAPI
+                    api = GlimmerAPI(url)
+                    if not api.health():
+                        raise RuntimeError('服务器不在线')
+                    api.reset_password(u, ans, new_pwd)
+
+                    Clock.schedule_once(lambda *_: (popup.dismiss(), self.show_popup('成功', '密码已重置，请用新密码登录')), 0)
+                except Exception as e:
+                    Clock.schedule_once(lambda *_, msg=str(e): self.show_popup('找回失败', msg), 0)
+
+
+            Thread(target=work, daemon=True).start()
+
+        load_btn.bind(on_press=load_question)
+        ok_btn.bind(on_press=submit)
+        popup.open()
+        load_question()
+
     def go_to_register(self, instance):
         """跳转到注册界面"""
         self.manager.current = 'register'
+
     
     def show_popup(self, title, message):
         """显示提示弹窗（自动换行/对齐，背景色与首页一致）"""
@@ -1229,46 +1423,62 @@ class RegisterScreen(Screen):
             self.show_popup("错误", "请填写安全问题与答案")
             return
 
+        # 服务器为准：密保答案不落本地，仅保存必要的资料缓存
+        profile_cache = {
+            'username': username,
+            'real_name': real_name,
+            'phone': phone,
+            'department': department,
+            'security_question': security_question,
+            'created_at': datetime.now().isoformat(),
+        }
+
+        # 先走服务器注册（用于群/公告等在线功能；用户数据保留服务器）
+        server_url = get_server_url()
+        if server_url:
+            def work():
+                try:
+                    api = get_api()
+                    api.register(username, password, real_name, phone, department, security_question, security_answer)
+
+                    # 本机仅缓存个人资料（不保存密码/密保答案）
+                    try:
+                        s = db.get_user_settings(username) or {}
+                        s['profile_cache'] = profile_cache
+                        db.save_user_settings(username, s)
+                    except Exception:
+                        pass
+
+                    Clock.schedule_once(lambda *_: self.show_popup("成功", "注册成功！请返回登录"), 0)
+                except Exception as e:
+                    Clock.schedule_once(lambda *_, msg=str(e): self.show_popup("注册失败", msg), 0)
+
+
+            Thread(target=work, daemon=True).start()
+            return
+
+        # 未配置服务器：仅本地模式（兼容离线使用）
         security_answer_hash = db._hash_password(security_answer) if hasattr(db, '_hash_password') else security_answer
         profile = {
             'real_name': real_name,
             'phone': phone,
             'department': department,
             'security_question': security_question,
-            'security_answer': security_answer_hash
+            'security_answer': security_answer_hash,
         }
-
-        # 先尝试服务器注册（用于群/公告等在线功能）
-        server_url = get_server_url()
-        if server_url:
-            def work():
-                try:
-                    api = get_api()
-                    api.register(username, password)
-
-                    # 本地也保存一份，便于离线查看当月记录
-                    success, message = db.add_user(username, password, profile=profile)
-                    if not success and message != '用户名已存在':
-                        # 本地失败不影响服务器账号
-                        pass
-
-                    Clock.schedule_once(lambda *_: self.show_popup("成功", "注册成功！请返回登录"), 0)
-                except Exception as e:
-                    # 服务器注册失败：提示原因，同时允许继续本地注册（仅本地模式）
-                    success, message = db.add_user(username, password, profile=profile)
-                    if success:
-                        Clock.schedule_once(lambda *_: self.show_popup("提示", f"服务器注册失败，将仅本地模式\n{e}"), 0)
-                    else:
-                        Clock.schedule_once(lambda *_: self.show_popup("注册失败", f"{e}\n本地：{message}"), 0)
-
-            Thread(target=work, daemon=True).start()
-            return
 
         success, message = db.add_user(username, password, profile=profile)
         if success:
+            try:
+                s = db.get_user_settings(username) or {}
+                s['profile_cache'] = profile_cache
+                db.save_user_settings(username, s)
+            except Exception:
+                pass
             self.show_popup("成功", "注册成功！请返回登录")
         else:
             self.show_popup("注册失败", message)
+
 
 
     

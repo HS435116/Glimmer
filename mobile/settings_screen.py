@@ -18,12 +18,14 @@ from kivy.uix.button import Button
 from kivy.uix.spinner import Spinner
 from kivy.uix.popup import Popup
 from kivy.uix.anchorlayout import AnchorLayout
+
 from kivy.clock import Clock
 
 from kivy.metrics import dp
 from kivy.graphics import Color, RoundedRectangle
 from datetime import datetime
-from main import StyledButton, db, get_server_url, set_server_url
+from main import StyledButton, db
+
 
 
 
@@ -43,37 +45,13 @@ class SettingsScreen(Screen):
 
 
 
-        # 标题
-        title = Label(
-            text='',
-            font_size=dp(24),
-            bold=True,
-            size_hint=(None, None),
-            size=(dp(200), dp(40)),
-            color=(1, 1, 1, 1)
-        )
-
-        title_box = AnchorLayout(size_hint=(1, None), height=dp(50), anchor_x='center', anchor_y='center')
-        title_box.add_widget(title)
-
-        main_layout.add_widget(title_box)
-        
         # 内容容器
         scroll_content = BoxLayout(orientation='vertical', spacing=dp(15), size_hint=(1, 1))
 
-        # 服务器设置（群/公告/版本/广告依赖网络）
-        server_group = self.create_setting_group("服务器设置")
-        server_row = BoxLayout(size_hint=(1, None), height=dp(50), spacing=dp(10))
-        server_row.add_widget(Label(text='服务器地址:', size_hint=(0.3, 1), color=(1, 1, 1, 1)))
-        self.server_url_input = TextInput(
-            hint_text='例如: http://192.168.1.10:8000',
-            multiline=False,
-            size_hint=(0.7, 1),
-            padding=[dp(10), dp(12), dp(10), dp(8)]
-        )
-        server_row.add_widget(self.server_url_input)
-        server_group.add_widget(server_row)
-        scroll_content.add_widget(server_group)
+
+
+
+
 
         # 位置设置
         location_group = self.create_setting_group("位置设置")
@@ -135,6 +113,8 @@ class SettingsScreen(Screen):
         self.auto_location_switch.bind(on_press=self.toggle_auto_location)
         auto_location_layout.add_widget(self.auto_location_switch)
         location_group.add_widget(auto_location_layout)
+
+
         
         scroll_content.add_widget(location_group)
 
@@ -151,6 +131,8 @@ class SettingsScreen(Screen):
             multiline=False,
             size_hint=(0.7, 1)
         )
+
+
         start_time_layout.add_widget(self.start_time_input)
         time_group.add_widget(start_time_layout)
         
@@ -163,6 +145,8 @@ class SettingsScreen(Screen):
             multiline=False,
             size_hint=(0.7, 1)
         )
+
+
         end_time_layout.add_widget(self.end_time_input)
         time_group.add_widget(end_time_layout)
         
@@ -218,6 +202,8 @@ class SettingsScreen(Screen):
         main_layout.add_widget(button_layout)
 
 
+
+
         
         self.add_widget(main_layout)
         
@@ -228,18 +214,19 @@ class SettingsScreen(Screen):
         """创建设置组"""
         group = BoxLayout(orientation='vertical', spacing=dp(10))
         
-        title_label = Label(
-            text=title,
-            font_size=dp(16),
-            bold=True,
-            size_hint=(1, None),
-            height=dp(30),
-            color=(1, 1, 1, 1)
+        # 兼容小屏/主题：时间设置分组不显示标题，避免“标题看不清/占位影响布局”
+        if str(title or '') != '时间设置':
+            title_label = Label(
+                text=title,
+                size_hint=(1, None),
+                height=dp(30),
+                color=(1, 1, 1, 1)
 
-        )
-        group.add_widget(title_label)
+            )
+            group.add_widget(title_label)
         
         return group
+
     
     def load_settings(self, dt):
         """加载用户设置"""
@@ -271,25 +258,44 @@ class SettingsScreen(Screen):
                 self.auto_location_switch.text = '关闭'
                 self.auto_location_switch.background_color = (0.8, 0.2, 0.2, 1)
 
+
+
+        self.apply_auto_location()
+
+        # 确保已启动 GPS，方便“使用当前位置/自动识别位置”
         try:
-            if hasattr(self, 'server_url_input'):
-                self.server_url_input.text = get_server_url() or ''
+            main_screen = self.manager.get_screen('main')
+            if hasattr(main_screen, 'start_gps') and not getattr(main_screen, 'current_location', None):
+                Clock.schedule_once(lambda *_: main_screen.start_gps(0), 0)
         except Exception:
             pass
 
-        self.apply_auto_location()
 
 
     def on_enter(self):
         """进入界面时应用自动位置"""
         self.load_settings(0)
+
+
+        self.apply_auto_location()
+
+        # 确保已启动 GPS，方便“使用当前位置/自动识别位置”
         try:
-            if hasattr(self, 'server_url_input'):
-                self.server_url_input.text = get_server_url() or ''
+            main_screen = self.manager.get_screen('main')
+            if hasattr(main_screen, 'start_gps') and not getattr(main_screen, 'current_location', None):
+                Clock.schedule_once(lambda *_: main_screen.start_gps(0), 0)
         except Exception:
             pass
 
-        self.apply_auto_location()
+
+        # 确保已启动 GPS，方便“使用当前位置/自动识别位置”
+        try:
+            main_screen = self.manager.get_screen('main')
+            if hasattr(main_screen, 'start_gps') and not getattr(main_screen, 'current_location', None):
+                Clock.schedule_once(lambda *_: main_screen.start_gps(0), 0)
+        except Exception:
+            pass
+
 
 
 
@@ -333,13 +339,18 @@ class SettingsScreen(Screen):
         else:
             instance.text = '关闭'
             instance.background_color = (0.8, 0.2, 0.2, 1)
+
+
+        self.apply_auto_location()
+
+        # 确保已启动 GPS，方便“使用当前位置/自动识别位置”
         try:
-            if hasattr(self, 'server_url_input'):
-                self.server_url_input.text = get_server_url() or ''
+            main_screen = self.manager.get_screen('main')
+            if hasattr(main_screen, 'start_gps') and not getattr(main_screen, 'current_location', None):
+                Clock.schedule_once(lambda *_: main_screen.start_gps(0), 0)
         except Exception:
             pass
 
-        self.apply_auto_location()
 
 
     def apply_auto_location(self):
@@ -415,12 +426,7 @@ class SettingsScreen(Screen):
             if radius <= 0:
                 raise ValueError("半径必须大于0")
             
-            # 保存服务器地址（用于群/公告/版本等在线功能）
-            try:
-                if hasattr(self, 'server_url_input'):
-                    set_server_url(self.server_url_input.text)
-            except Exception:
-                pass
+
 
             # 保存设置（保留其他字段）
             settings = db.get_user_settings(app.current_user) or {}
@@ -448,8 +454,23 @@ class SettingsScreen(Screen):
 
     
     def go_back(self, instance):
-        """返回主界面"""
+        """返回主界面（离开即清理焦点/状态，避免冗余）"""
+        try:
+            for w in [
+                getattr(self, 'lat_input', None),
+
+                getattr(self, 'lon_input', None),
+                getattr(self, 'radius_input', None),
+                getattr(self, 'start_time_input', None),
+                getattr(self, 'end_time_input', None),
+            ]:
+                if w is not None and hasattr(w, 'focus'):
+                    w.focus = False
+        except Exception:
+            pass
+
         self.manager.current = 'main'
+
     
     def show_popup(self, title, message):
         """显示提示弹窗（自动换行/对齐，背景色与首页一致）"""

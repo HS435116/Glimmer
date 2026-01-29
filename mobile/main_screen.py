@@ -8,9 +8,11 @@
 """
 
 
+import os
 import json
 import calendar
 import time
+
 from threading import Thread
 from datetime import datetime, time as dt_time, timedelta
 
@@ -32,12 +34,13 @@ from kivy.uix.spinner import Spinner
 from kivy.uix.anchorlayout import AnchorLayout
 from kivy.uix.floatlayout import FloatLayout
 from kivy.uix.image import AsyncImage
+from kivy.uix.textinput import TextInput
 from kivy.clock import Clock
 from kivy.metrics import dp
 from kivy.graphics import Color, Rectangle, RoundedRectangle
 from kivy.utils import platform as kivy_platform
 
-# plyer 在不同平台/权限环境下可能不可用；为避免启动即异常导致“看起来进后台/闪退”，这里做容错。
+# plyer 在不同平台/权限环境下可能不可用；为避免启动即异常导致"看起来进后台/闪退"，这里做容错。
 try:
     from plyer import gps, notification
 except Exception:  # pragma: no cover
@@ -94,12 +97,29 @@ class MainScreen(Screen):
 
         info_row = BoxLayout(orientation='horizontal', size_hint=(1, None), height=dp(40), spacing=dp(6))
 
-        # 用户信息标签
+        # 用户信息 + 用户ID标签（可点击查看个人资料）
         self.user_label = Label(text='', font_size=dp(13), color=(0.9, 0.9, 0.9, 1), shorten=True, shorten_from='right', halign='left', valign='middle')
         self.user_label.bind(size=lambda instance, value: setattr(instance, 'text_size', value))
-        left_box = BoxLayout(size_hint=(0.38, 1))
 
+        self.user_id_btn = Button(
+            text='ID:未知',
+            size_hint=(None, 1),
+            width=dp(110),
+            font_size=dp(10),
+            background_color=(0.12, 0.2, 0.35, 0.95),
+            color=(0.95, 0.97, 1, 1),
+            halign='center',
+            valign='middle',
+            shorten=True,
+            shorten_from='right',
+        )
+        self.user_id_btn.bind(size=lambda instance, value: setattr(instance, 'text_size', value))
+        self.user_id_btn.bind(on_press=lambda *_: self.open_profile())
+
+        left_box = BoxLayout(size_hint=(0.38, 1), spacing=dp(6))
         left_box.add_widget(self.user_label)
+        left_box.add_widget(self.user_id_btn)
+
 
         # 右侧按钮
         actions_box = GridLayout(cols=5, size_hint=(0.62, 1), spacing=dp(6))
@@ -258,8 +278,25 @@ class MainScreen(Screen):
         """进入界面时更新显示"""
         app = App.get_running_app()
         if hasattr(app, 'current_user'):
-            self.user_label.text = f"用户: {app.current_user}"
+            display_name = str(app.current_user or '')
+            try:
+                prof = db.get_user_profile(app.current_user) or {}
+                real_name = str(prof.get('real_name') or '').strip()
+                if real_name:
+                    display_name = real_name
+            except Exception:
+                pass
+            self.user_label.text = f"用户: {display_name}" if display_name else "用户: 未知"
+            try:
+                uname = str(app.current_user or '')
+                self.user_id_btn.text = f"用户:{uname}" if uname else '用户:未知'
+            except Exception:
+                self.user_id_btn.text = '用户:未知'
+
+
+
             self.load_attendance_records()
+
             self.update_ad_visibility()
             self.check_for_updates()
             self.update_announcement_indicator()
@@ -274,11 +311,19 @@ class MainScreen(Screen):
             # 在线公告轮询（群内公告/全局公告）：只要有网络就可收到通知
             self._start_server_feed_polling()
 
-            # 刷新“全局公告/版本信息”，用于公告按钮展示与闪烁提醒
+            # 刷新"全局公告/版本信息"，用于公告按钮展示与闪烁提醒
             self._start_public_config_polling()
 
             # 离线补传：连接主服务器后自动同步历史打卡记录
             self._start_attendance_sync_polling()
+
+            # 管理员提醒：补录申请/聊天消息等
+            self._start_admin_notice_polling()
+
+            # 聊天提醒：未读聊天消息上线后通过“公告”提醒
+            self._start_chat_notice_polling()
+
+
 
 
 
@@ -308,8 +353,14 @@ class MainScreen(Screen):
 
                 latest = api.public_latest_global_announcement()
                 version = api.public_version()
+                ads = None
+                try:
+                    ads = api.get_ads()
+                except Exception:
+                    ads = None
 
                 settings = db.get_user_settings('__global__') or {}
+
 
                 if latest:
                     settings['announcement_text'] = str(latest.get('content') or '')
@@ -322,7 +373,21 @@ class MainScreen(Screen):
                     updated_at = str(version.get('updated_at') or '')
                     settings['latest_version_time'] = updated_at[:16].replace('T', ' ') if updated_at else ''
 
+                # 广告位：工程师发布后固定显示在登录后页面底部
+                if isinstance(ads, dict) and ads:
+                    enabled = bool(ads.get('enabled', False))
+                    settings['ad_top_enabled'] = False
+                    settings['ad_bottom_enabled'] = enabled
+                    settings['ad_bottom_text'] = str(ads.get('text') or '')
+                    settings['ad_bottom_image_url'] = str(ads.get('image_url') or '')
+                    settings['ad_bottom_text_url'] = str(ads.get('link_url') or '')
+                    # 工程师发布广告：展示模式由服务端下发（垂直/水平/静止）
+                    settings['ad_bottom_scroll_mode'] = str(ads.get('scroll_mode') or '垂直滚动')
+
+
+
                 db.save_user_settings('__global__', settings)
+
 
                 Clock.schedule_once(lambda *_: (self.update_announcement_indicator(), self.check_for_updates()), 0)
             except Exception:
@@ -464,7 +529,177 @@ class MainScreen(Screen):
         Thread(target=work, daemon=True).start()
 
 
+    def _is_admin_account(self) -> bool:
+        app = App.get_running_app()
+        role = ''
+        try:
+            role = str(getattr(app, 'server_role', '') or (getattr(app, 'user_data', {}) or {}).get('role') or '')
+        except Exception:
+            role = ''
+        return role == 'admin'
+
+
+    def _start_admin_notice_polling(self):
+        if getattr(self, '_admin_notice_ev', None):
+            return
+        if not self._is_admin_account():
+            return
+
+        self._admin_notice_ev = Clock.schedule_interval(lambda *_: self._poll_admin_notices(), 12)
+        Clock.schedule_once(lambda *_: self._poll_admin_notices(), 1.5)
+
+
+    def _poll_admin_notices(self):
+        if getattr(self, '_admin_notice_inflight', False):
+            return
+
+        app = App.get_running_app()
+        if not hasattr(app, 'current_user'):
+            return
+
+        token = str(getattr(app, 'api_token', '') or '')
+        base_url = str(getattr(app, 'server_url', '') or get_server_url() or '')
+        if not token or not base_url:
+            return
+
+        self._admin_notice_inflight = True
+
+        def work():
+            try:
+                api = GlimmerAPI(base_url)
+                if not api.health():
+                    return
+
+                username = str(getattr(app, 'current_user', '') or '')
+                settings = db.get_user_settings(username) or {}
+
+                # 1) 补录待审核
+                corr_cnt = 0
+                try:
+                    corr_cnt = len(api.pending_corrections(token) or [])
+                except Exception:
+                    corr_cnt = 0
+
+                # 2) 聊天消息（本机缓存）：文件更新则提示
+                chat_unseen = False
+                try:
+                    chat_path = 'chat_cache.json'
+                    if os.path.exists(chat_path):
+                        mtime = float(os.path.getmtime(chat_path) or 0)
+                        seen = float(settings.get('admin_chat_seen_mtime', 0) or 0)
+                        if mtime > seen:
+                            chat_unseen = True
+                except Exception:
+                    chat_unseen = False
+
+                parts = []
+                if corr_cnt > 0:
+                    parts.append(f"有{corr_cnt}条补录待审核（在线管理->补录审核）")
+                if chat_unseen:
+                    parts.append('收到新的聊天消息（团队详情->成员->聊天）')
+
+                text = "\n".join(parts).strip()
+                now_text = datetime.now().strftime('%Y-%m-%d %H:%M')
+
+                need_save = False
+                new_cnt = int(corr_cnt or 0)
+                old_cnt = int(settings.get('admin_notice_corr_count', 0) or 0)
+                if old_cnt != new_cnt:
+                    settings['admin_notice_corr_count'] = new_cnt
+                    need_save = True
+
+                if text:
+                    if str(settings.get('admin_notice_text', '') or '') != text:
+                        settings['admin_notice_text'] = text
+                        settings['admin_notice_time'] = now_text
+                        need_save = True
+                else:
+                    if settings.get('admin_notice_text') or old_cnt != 0:
+                        settings['admin_notice_text'] = ''
+                        settings['admin_notice_time'] = ''
+                        settings['admin_notice_corr_count'] = 0
+                        need_save = True
+
+                if need_save:
+                    db.save_user_settings(username, settings)
+
+
+                Clock.schedule_once(lambda *_: self.update_announcement_indicator(), 0)
+            except Exception:
+                return
+            finally:
+                self._admin_notice_inflight = False
+
+        Thread(target=work, daemon=True).start()
+
+
+    def _start_chat_notice_polling(self):
+        if getattr(self, '_chat_notice_ev', None):
+            return
+        if not self.is_logged_in():
+            return
+
+        self._chat_notice_ev = Clock.schedule_interval(lambda *_: self._poll_chat_notices(), 10)
+        Clock.schedule_once(lambda *_: self._poll_chat_notices(), 1.2)
+
+
+    def _poll_chat_notices(self):
+        if getattr(self, '_chat_notice_inflight', False):
+            return
+
+        app = App.get_running_app()
+        if not hasattr(app, 'current_user'):
+            return
+
+        token = str(getattr(app, 'api_token', '') or '')
+        base_url = str(getattr(app, 'server_url', '') or get_server_url() or '')
+        if not token or not base_url:
+            return
+
+        self._chat_notice_inflight = True
+
+        def work():
+            try:
+                api = GlimmerAPI(base_url)
+                if not api.health():
+                    return
+
+                cnt = 0
+                try:
+                    cnt = int(api.chat_unread_count(token) or 0)
+                except Exception:
+                    cnt = 0
+
+                username = str(getattr(app, 'current_user', '') or '')
+                settings = db.get_user_settings(username) or {}
+                old_cnt = int(settings.get('chat_notice_count', 0) or 0)
+
+                if cnt > 0:
+                    # 只在数量变化时更新时间，避免一直闪
+                    if old_cnt != cnt:
+                        settings['chat_notice_count'] = cnt
+                        settings['chat_notice_text'] = f"收到{cnt}条新聊天消息（团队详情->成员->聊天）"
+                        settings['chat_notice_time'] = datetime.now().strftime('%Y-%m-%d %H:%M')
+                        db.save_user_settings(username, settings)
+                else:
+                    if old_cnt != 0 or settings.get('chat_notice_text'):
+                        settings['chat_notice_count'] = 0
+                        settings['chat_notice_text'] = ''
+                        settings['chat_notice_time'] = ''
+                        db.save_user_settings(username, settings)
+
+                Clock.schedule_once(lambda *_: self.update_announcement_indicator(), 0)
+            except Exception:
+                return
+            finally:
+                self._chat_notice_inflight = False
+
+        Thread(target=work, daemon=True).start()
+
+
     def parse_version(self, version_text):
+
+
 
         parts = []
         for item in str(version_text).split('.'):
@@ -601,7 +836,29 @@ class MainScreen(Screen):
             return '', ''
         app = App.get_running_app()
         settings = db.get_user_settings(app.current_user) or {}
+
+        # 管理员提醒（补录/聊天等）优先展示
+        role = ''
+        try:
+            role = str(getattr(app, 'server_role', '') or (getattr(app, 'user_data', {}) or {}).get('role') or '')
+        except Exception:
+            role = ''
+
+        if role == 'admin':
+            admin_text = str(settings.get('admin_notice_text', '') or '')
+            admin_time = str(settings.get('admin_notice_time', '') or '')
+            if admin_text:
+                return admin_text, admin_time
+
+        # 聊天提醒（团队成员离线消息）：优先于普通打卡提示
+        chat_text = str(settings.get('chat_notice_text', '') or '')
+        chat_time = str(settings.get('chat_notice_time', '') or '')
+        if chat_text:
+            return chat_text, chat_time
+
         return settings.get('punch_notice_text', ''), settings.get('punch_notice_time', '')
+
+
 
 
     def is_logged_in(self):
@@ -735,7 +992,40 @@ class MainScreen(Screen):
         system_unseen = system_token and system_token != seen_system
         punch_unseen = punch_token and punch_token != seen_punch
 
-        def open_popup(text, time_text, key, token, on_close=None):
+        app = App.get_running_app()
+        role = ''
+        try:
+            role = str(getattr(app, 'server_role', '') or (getattr(app, 'user_data', {}) or {}).get('role') or '')
+        except Exception:
+            role = ''
+
+        admin_corr_cnt = 0
+        try:
+            if role == 'admin' and hasattr(app, 'current_user'):
+                s = db.get_user_settings(app.current_user) or {}
+                admin_corr_cnt = int(s.get('admin_notice_corr_count', 0) or 0)
+        except Exception:
+            admin_corr_cnt = 0
+
+        def goto_corr_tab():
+            try:
+                self.manager.current = 'server_admin'
+            except Exception:
+                return
+
+            def _jump(_dt):
+                try:
+                    scr = self.manager.get_screen('server_admin')
+                    if hasattr(scr, 'show_tab'):
+                        scr.show_tab('corr')
+                except Exception:
+                    pass
+
+            Clock.schedule_once(_jump, 0.2)
+
+        punch_action = goto_corr_tab if (role == 'admin' and admin_corr_cnt > 0) else None
+
+        def open_popup(text, time_text, key, token, on_close=None, action=None, action_text='去处理'):
             content = BoxLayout(orientation='vertical', spacing=dp(12), padding=dp(20))
             title = f"公告时间：{time_text}" if time_text else "公告"
             content.add_widget(Label(text=title, color=(0.9, 0.95, 1, 1)))
@@ -743,37 +1033,67 @@ class MainScreen(Screen):
             message.bind(size=lambda instance, value: setattr(instance, 'text_size', value))
             content.add_widget(message)
 
-            close_btn = Button(text='关闭', size_hint=(1, None), height=dp(44), background_color=(0.2, 0.6, 0.8, 1))
-            content.add_widget(close_btn)
-
-            popup = Popup(title='公告提醒', content=content, size_hint=(0.88, 0.5), background_color=(0.0667, 0.149, 0.3098, 1), background='')
+            btn_row = BoxLayout(size_hint=(1, None), height=dp(44), spacing=dp(10))
+            close_btn = Button(text='关闭', background_color=(0.2, 0.6, 0.8, 1))
 
             def handle_close(*args):
                 self.mark_announcement_seen(key, token)
-                popup.dismiss()
+                try:
+                    popup.dismiss()
+                except Exception:
+                    pass
                 if on_close:
                     on_close()
                 else:
                     self.update_announcement_indicator()
 
+            def handle_action(*args):
+                self.mark_announcement_seen(key, token)
+                try:
+                    popup.dismiss()
+                except Exception:
+                    pass
+                try:
+                    if action:
+                        action()
+                finally:
+                    self.update_announcement_indicator()
+
+            if action:
+                go_btn = Button(text=str(action_text or '去处理'), background_color=(0.18, 0.62, 0.38, 1))
+                go_btn.bind(on_press=handle_action)
+                btn_row.add_widget(go_btn)
+                close_btn.size_hint = (0.5, 1)
+                go_btn.size_hint = (0.5, 1)
+            else:
+                close_btn.size_hint = (1, 1)
+
             close_btn.bind(on_press=handle_close)
+            btn_row.add_widget(close_btn)
+            content.add_widget(btn_row)
+
+            popup = Popup(title='公告提醒', content=content, size_hint=(0.88, 0.5), background_color=(0.0667, 0.149, 0.3098, 1), background='')
             popup.open()
+
 
         if system_unseen:
             next_step = None
             if punch_unseen:
-                next_step = lambda: open_popup(punch_text, punch_time, 'punch', punch_token)
+                next_step = lambda: open_popup(punch_text, punch_time, 'punch', punch_token, action=punch_action, action_text='去补录审核')
+
             open_popup(system_text, system_time, 'system', system_token, next_step)
             return
 
         if punch_unseen:
-            open_popup(punch_text, punch_time, 'punch', punch_token)
+            open_popup(punch_text, punch_time, 'punch', punch_token, action=punch_action, action_text='去补录审核')
+
             return
 
         if system_text:
             open_popup(system_text, system_time, 'system', system_token)
         else:
-            open_popup(punch_text, punch_time, 'punch', punch_token)
+            open_popup(punch_text, punch_time, 'punch', punch_token, action=punch_action, action_text='去补录审核')
+
 
 
     def update_ad_visibility(self):
@@ -807,6 +1127,10 @@ class MainScreen(Screen):
         image_url = settings.get(f'ad_{position}_image_url', '')
         link_url = settings.get(f'ad_{position}_text_url', '')
         scroll_mode = settings.get(f'ad_{position}_scroll_mode', '静止')
+        # 兼容旧值："等待" 作为静止展示处理
+        if scroll_mode == '等待':
+            scroll_mode = '静止'
+
 
         if not text and not image_url:
             container.add_widget(Label(text='广告位已开启', color=(1, 1, 1, 1)))
@@ -847,9 +1171,21 @@ class MainScreen(Screen):
             container.bind(size=lambda instance, value: setattr(marquee, 'size', value))
             text_label = Label(text=text, color=(1, 1, 1, 1), size_hint=(None, None))
             marquee.add_widget(text_label)
+
+            # 滚动模式也支持点击跳转
+            if safe_link_url:
+                def handle_touch(_instance, touch):
+                    if marquee.collide_point(*touch.pos):
+                        self.confirm_open_link(safe_link_url)
+                        return True
+                    return False
+
+                marquee.bind(on_touch_down=handle_touch)
+
             container.add_widget(marquee)
             Clock.schedule_once(lambda dt: self.start_marquee(marquee, text_label, scroll_mode, position), 0)
             return
+
 
         if safe_link_url:
             link_btn = Button(text=text or '广告链接', background_color=(0, 0, 0, 0), color=(1, 1, 1, 1))
@@ -1116,6 +1452,7 @@ class MainScreen(Screen):
         return (f"当前机型：{model}" if model else '')
 
 
+
     def _start_android_location_fallback(self):
         if kivy_platform != 'android':
             return
@@ -1340,13 +1677,28 @@ class MainScreen(Screen):
 
         status = "自动记录"
         notes = f"离开范围/超出时间，距离{distance_meters}米"
+
+        user_id = ''
+        try:
+            user_id = str((getattr(app, 'user_data', {}) or {}).get('user_id') or '')
+        except Exception:
+            user_id = ''
+        if not user_id:
+            try:
+                user_id = str((db.get_user_record(app.current_user) or {}).get('user_id') or '')
+            except Exception:
+                user_id = ''
+        if not user_id:
+            user_id = str(app.current_user)
+
         db.add_attendance(
-            app.user_data['user_id'],
+            user_id,
             app.current_user,
             status,
             f"{self.current_location['latitude']:.6f}, {self.current_location['longitude']:.6f}",
             notes
         )
+
 
         try:
             self._trigger_attendance_sync()
@@ -1422,9 +1774,21 @@ class MainScreen(Screen):
                     'longitude': settings.get('longitude')
                 }
 
+        # Android 端强制使用“新鲜”的 GPS 定位（避免用到很久之前的缓存坐标）
+        if kivy_platform == 'android':
+            last_fix = getattr(self, '_gps_last_fix_ts', 0) or 0
+            if (not self.current_location) or (not last_fix) or (time.time() - float(last_fix) > 120):
+                try:
+                    self.start_gps(0)
+                except Exception:
+                    pass
+                self.show_popup("定位中", "正在获取GPS定位，请稍后再试")
+                return
+
         if not self.current_location:
             self.show_popup("错误", "无法获取当前位置")
             return
+
 
         # 检查时间
         current_time = datetime.now().time()
@@ -1463,13 +1827,27 @@ class MainScreen(Screen):
             notes = f"位置不匹配，距离{int(distance_meters)}米"
         
         # 保存打卡记录
+        user_id = ''
+        try:
+            user_id = str((getattr(app, 'user_data', {}) or {}).get('user_id') or '')
+        except Exception:
+            user_id = ''
+        if not user_id:
+            try:
+                user_id = str((db.get_user_record(app.current_user) or {}).get('user_id') or '')
+            except Exception:
+                user_id = ''
+        if not user_id:
+            user_id = str(app.current_user)
+
         record_id = db.add_attendance(
-            app.user_data['user_id'],
+            user_id,
             app.current_user,
             status,
             f"{self.current_location['latitude']:.6f}, {self.current_location['longitude']:.6f}",
             notes
         )
+
 
         # 尝试立即同步（失败则保留在本地，等待网络恢复后自动补传）
         try:
@@ -1683,7 +2061,8 @@ class MainScreen(Screen):
 
                 Clock.schedule_once(lambda *_: ui(), 0)
             except Exception as e:
-                Clock.schedule_once(lambda *_: (popup.dismiss(), self.show_popup('错误', str(e))), 0)
+                Clock.schedule_once(lambda *_, msg=str(e): (popup.dismiss(), self.show_popup('错误', msg)), 0)
+
 
         Thread(target=load_groups, daemon=True).start()
 
@@ -1713,7 +2092,8 @@ class MainScreen(Screen):
 
                     Clock.schedule_once(lambda *_: ui_ok(), 0)
                 except Exception as e:
-                    Clock.schedule_once(lambda *_: self.show_popup('错误', str(e)), 0)
+                    Clock.schedule_once(lambda *_, msg=str(e): self.show_popup('错误', msg), 0)
+
 
             Thread(target=work, daemon=True).start()
 
@@ -1809,17 +2189,22 @@ class MainScreen(Screen):
 
 
             if day_records:
-                times = sorted([
-                    datetime.fromisoformat(item['timestamp']).strftime("%H:%M")
-                    for item in day_records
-                ])
-                time_range = f"{times[0]} - {times[-1]}" if len(times) > 1 else times[0]
-                status_text = "已打卡" if any(item['status'] in ("打卡成功", "补录") for item in day_records) else "异常"
+                times = []
+                for item in day_records:
+                    ts = str(item.get('timestamp') or '')
+                    try:
+                        times.append(datetime.fromisoformat(ts).strftime("%H:%M"))
+                    except Exception:
+                        continue
+                times = sorted(times)
+                time_range = f"{times[0]} - {times[-1]}" if len(times) > 1 else (times[0] if times else "记录异常")
+                status_text = "已打卡" if any(item.get('status') in ("打卡成功", "补录") for item in day_records) else "异常"
                 status_color = (1, 1, 1, 1) if status_text == "已打卡" else (0.95, 0.6, 0.2, 1)
             else:
                 time_range = "无记录"
                 status_text = "未打卡"
                 status_color = (1, 0.2, 0.2, 1)
+
 
 
             if any(item['status'] in ("打卡成功", "补录") for item in day_records):
@@ -1888,8 +2273,23 @@ class MainScreen(Screen):
         self.manager.current = 'groups'
 
 
+    def open_profile(self):
+        """打开个人资料页"""
+        try:
+            app = App.get_running_app()
+            app.profile_back_to = self.manager.current
+        except Exception:
+            pass
+        try:
+            self.manager.current = 'profile'
+        except Exception:
+            pass
+
+
+
     def open_admin(self, instance):
         """打开管理员界面"""
+
         app = App.get_running_app()
         role = ''
         try:
@@ -1925,6 +2325,28 @@ class MainScreen(Screen):
                 pass
         self._attendance_sync_ev = None
         self._attendance_sync_inflight = False
+
+        # 停止管理员提醒轮询
+        ev = getattr(self, '_admin_notice_ev', None)
+        if ev:
+            try:
+                ev.cancel()
+            except Exception:
+                pass
+        self._admin_notice_ev = None
+        self._admin_notice_inflight = False
+
+        # 停止聊天提醒轮询
+        ev = getattr(self, '_chat_notice_ev', None)
+        if ev:
+            try:
+                ev.cancel()
+            except Exception:
+                pass
+        self._chat_notice_ev = None
+        self._chat_notice_inflight = False
+
+
         
         # 清除用户信息
 

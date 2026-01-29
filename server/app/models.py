@@ -39,7 +39,19 @@ class User(Base):
     username: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(String(255))
     role: Mapped[Role] = mapped_column(Enum(Role), default=Role.user, index=True)
+
+    # 个人资料（服务器为准）
+    real_name: Mapped[str | None] = mapped_column(String(120), default='')
+    phone: Mapped[str | None] = mapped_column(String(40), default='')
+    department: Mapped[str | None] = mapped_column(String(120), default='')
+
+    # 密保（用于忘记密码找回）
+    security_question: Mapped[str | None] = mapped_column(String(200), default='')
+    security_answer_hash: Mapped[str | None] = mapped_column(String(255), default='')
+
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    last_login: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_login_ip: Mapped[str | None] = mapped_column(String(64), default='')
 
     memberships: Mapped[list[Membership]] = relationship('Membership', back_populates='user', cascade='all, delete-orphan')
 
@@ -120,8 +132,37 @@ class AdConfig(Base):
     text: Mapped[str] = mapped_column(String(200), default='')
     image_url: Mapped[str] = mapped_column(String(400), default='')
     link_url: Mapped[str] = mapped_column(String(400), default='')
+
+    # 广告展示模式（与客户端一致）
+    # - 垂直滚动：上下滚动
+    # - 水平滚动：左右滚动
+    # - 静止：不滚动
+    scroll_mode: Mapped[str] = mapped_column(String(20), default='垂直滚动')
+
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_by_user_id: Mapped[int | None] = mapped_column(Integer, ForeignKey('users.id'), nullable=True)
+
+
+class ChatMessage(Base):
+    __tablename__ = 'chat_messages'
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    sender_id: Mapped[int] = mapped_column(Integer, ForeignKey('users.id'), index=True)
+    receiver_id: Mapped[int] = mapped_column(Integer, ForeignKey('users.id'), index=True)
+
+    text: Mapped[str] = mapped_column(String(1000), default='')
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+    # 仅接收方使用：是否已读
+    read_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+
+    # 每个用户可以独立删除（软删除）
+    deleted_by_sender: Mapped[bool] = mapped_column(Boolean, default=False)
+    deleted_by_receiver: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    __table_args__ = (
+        Index('ix_chat_receiver_read', 'receiver_id', 'read_at'),
+    )
 
 
 class Attendance(Base):
