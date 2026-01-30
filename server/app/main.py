@@ -61,9 +61,11 @@ from .schemas import (
     UserOut,
     UserProfileOut,
     EngineerUserDetailOut,
+    EngineerWipeIn,
     VersionIn,
     VersionOut,
 )
+
 
 
 from .security import create_access_token, decode_token, hash_password, verify_password
@@ -120,6 +122,11 @@ def _ensure_group_code_unique(db: Session) -> str:
     raise HTTPException(status_code=500, detail='failed to allocate group_code')
 
 
+_USER_ID_START = 50000
+_ADMIN_ID_START = 1000
+_ENGINEER_ID = 999
+
+
 def _alloc_admin_username(db: Session, base: str = 'admin') -> str:
     base = str(base or 'admin').strip() or 'admin'
     # admin, admin1, admin2... 递增
@@ -130,6 +137,45 @@ def _alloc_admin_username(db: Session, base: str = 'admin') -> str:
         if not _get_user_by_username(db, name):
             return name
     raise HTTPException(status_code=500, detail='failed to allocate admin username')
+
+
+def _alloc_role_user_id(db: Session, role: Role) -> int:
+    # 约定：
+    # - 普通用户 id 从 50000 开始自增
+    # - 管理员 id 从 1000 开始自增
+    # - 工程师固定 id=999
+
+    if role == Role.engineer:
+        existing = db.execute(select(User).where(User.id == int(_ENGINEER_ID))).scalar_one_or_none()
+        if existing and existing.role != Role.engineer:
+            # id 被占用时无法强制改写（会破坏外键），直接报错提示清理数据后再初始化
+            raise HTTPException(status_code=500, detail='engineer id 999 is already used')
+        return int(_ENGINEER_ID)
+
+    if role == Role.admin:
+        max_id = db.execute(
+            select(func.max(User.id)).where(and_(User.role == Role.admin, User.id >= int(_ADMIN_ID_START)))
+        ).scalar_one()
+        candidate = int(max_id or (_ADMIN_ID_START - 1)) + 1
+        if candidate < _ADMIN_ID_START:
+            candidate = _ADMIN_ID_START
+    else:
+        max_id = db.execute(
+            select(func.max(User.id)).where(and_(User.role == Role.user, User.id >= int(_USER_ID_START)))
+        ).scalar_one()
+        candidate = int(max_id or (_USER_ID_START - 1)) + 1
+        if candidate < _USER_ID_START:
+            candidate = _USER_ID_START
+
+    # 如果该 id 被其它角色占用，则顺延直到找到空位
+    for _ in range(200000):
+        exists = db.execute(select(User.id).where(User.id == int(candidate))).first()
+        if not exists:
+            return int(candidate)
+        candidate += 1
+
+    raise HTTPException(status_code=500, detail='failed to allocate user id')
+
 
 
 
@@ -258,16 +304,21 @@ def _startup():
         eng_pass = os.environ.get('GLIMMER_ENGINEER_PASS') or 'engineer123'
         u = _get_user_by_username(db, eng_user)
         if not u:
-            db.add(User(username=eng_user, password_hash=hash_password(eng_pass), role=Role.engineer))
+            # 工程师固定 id=999（若该 id 已被占用，会抛错）
+            eid = _alloc_role_user_id(db, Role.engineer)
+            db.add(User(id=int(eid), username=eng_user, password_hash=hash_password(eng_pass), role=Role.engineer))
             db.commit()
+
 
         # 引导管理员账号（仅管理权限，不含工程师权限）
         admin_user = os.environ.get('GLIMMER_ADMIN_USER') or 'admin'
         admin_pass = os.environ.get('GLIMMER_ADMIN_PASS') or 'admin123'
         a = _get_user_by_username(db, admin_user)
         if not a:
+            aid = _alloc_role_user_id(db, Role.admin)
             db.add(
                 User(
+                    id=int(aid),
                     username=admin_user,
                     password_hash=hash_password(admin_pass),
                     role=Role.admin,
@@ -277,6 +328,7 @@ def _startup():
                 )
             )
             db.commit()
+
         else:
             # 若已有同名账号：确保其为管理员且可用（不覆盖 engineer）
             if a.role != Role.engineer:
@@ -321,7 +373,9 @@ def register(data: RegisterIn, db: Annotated[Session, Depends(get_db)]):
     if not q or not a:
         raise HTTPException(status_code=400, detail='security_question/security_answer required')
 
+    uid = _alloc_role_user_id(db, Role.user)
     user = User(
+        id=int(uid),
         username=str(data.username),
         password_hash=hash_password(str(data.password)),
         role=Role.user,
@@ -331,6 +385,7 @@ def register(data: RegisterIn, db: Annotated[Session, Depends(get_db)]):
         security_question=q,
         security_answer_hash=hash_password(a),
     )
+
     db.add(user)
     db.commit()
     db.refresh(user)
@@ -1095,16 +1150,18 @@ def remove_group_member(
 def engineer_create_admin(
     db: Annotated[Session, Depends(get_db)],
     user: Annotated[User, Depends(get_current_user)],
-    password: str | None = Query(default=None, description='管理员初始密码（默认 admin123）'),
+    base: str | None = Query(default='admin', description='基础用户名（默认 admin）'),
 ):
-    # 支持多个 admin 用户名：admin, admin1, admin2 ... 自动累加
+    # 支持多个 admin 用户名：{base}, {base}1, {base}2 ... 自动累加
     _require_engineer(user)
 
-    uname = _alloc_admin_username(db, 'admin')
-    pwd = str(password or '').strip() or (os.environ.get('GLIMMER_ADMIN_PASS') or 'admin123')
+    uname = _alloc_admin_username(db, str(base or 'admin'))
+    pwd = 'admin123'
 
+    aid = _alloc_role_user_id(db, Role.admin)
     db.add(
         User(
+            id=int(aid),
             username=uname,
             password_hash=hash_password(pwd),
             role=Role.admin,
@@ -1113,9 +1170,38 @@ def engineer_create_admin(
             security_answer_hash=hash_password('admin'),
         )
     )
+
     db.commit()
     created = _get_user_by_username(db, uname)
     return {'id': (created.id if created else None), 'username': uname, 'password': pwd}
+
+
+@app.post('/engineer/wipe_all')
+def engineer_wipe_all(
+    data: EngineerWipeIn,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User, Depends(get_current_user)],
+):
+    _require_engineer(user)
+
+    if not verify_password(str(data.password or ''), str(getattr(user, 'password_hash', '') or '')):
+        raise HTTPException(status_code=401, detail='password mismatch')
+
+    # 清理“用户所有数据”（不可恢复）：清空业务表 + 删除非工程师账号。
+    # 保留工程师账号，以便后续重新初始化/创建管理员。
+    db.execute(delete(ChatMessage))
+    db.execute(delete(Attendance))
+    db.execute(delete(CorrectionRequest))
+    db.execute(delete(JoinRequest))
+    db.execute(delete(Membership))
+    db.execute(delete(Announcement))
+    db.execute(delete(Group))
+
+    db.execute(delete(User).where(User.role != Role.engineer))
+
+    db.commit()
+    return {'ok': True}
+
 
 
 

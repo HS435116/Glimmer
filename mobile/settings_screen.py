@@ -21,6 +21,8 @@ from kivy.uix.anchorlayout import AnchorLayout
 
 from kivy.clock import Clock
 
+
+
 from kivy.metrics import dp
 from kivy.graphics import Color, RoundedRectangle
 from datetime import datetime
@@ -47,6 +49,9 @@ class SettingsScreen(Screen):
 
         # 内容容器
         scroll_content = BoxLayout(orientation='vertical', spacing=dp(15), size_hint=(1, 1))
+
+
+
 
 
 
@@ -200,6 +205,8 @@ class SettingsScreen(Screen):
         
         main_layout.add_widget(scroll_content)
         main_layout.add_widget(button_layout)
+
+
 
 
 

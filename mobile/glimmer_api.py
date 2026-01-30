@@ -473,3 +473,26 @@ class GlimmerAPI:
         if r.status_code != 200:
             self._raise(r)
         return r.json() or {}
+
+    # 工程师能力
+    def engineer_create_admin(self, token: str, base_username: str = 'admin') -> dict[str, Any]:
+        r = requests.post(
+            self._url('/engineer/admins/create'),
+            params={'base': str(base_username or 'admin')},
+            timeout=self.timeout,
+            headers=self._headers(token),
+        )
+        if r.status_code != 200:
+            self._raise(r)
+        return r.json() or {}
+
+    def engineer_wipe_all(self, token: str, password: str) -> dict[str, Any]:
+        r = requests.post(
+            self._url('/engineer/wipe_all'),
+            json={'password': str(password or '')},
+            timeout=self.timeout,
+            headers=self._headers(token),
+        )
+        if r.status_code != 200:
+            self._raise(r)
+        return r.json() or {}

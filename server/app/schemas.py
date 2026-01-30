@@ -75,6 +75,10 @@ class EngineerUserDetailOut(BaseModel):
     password_hash: str = ''
 
 
+class EngineerWipeIn(BaseModel):
+    password: str = Field(min_length=1, max_length=128)
+
+
 class GroupOut(BaseModel):
     id: int
     name: str

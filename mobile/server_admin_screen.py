@@ -503,6 +503,19 @@ class ServerAdminScreen(Screen):
         self.info.text = '加载可管理的团队...'
         box = BoxLayout(orientation='vertical', spacing=dp(8))
 
+        role = self._role()
+
+        # 管理员团队管理：创建团队 + 管理成员（工程师也可查看全部团队）
+        create_btn = None
+        if role in ('admin', 'engineer'):
+            box.add_widget(Label(text='创建团队', size_hint=(1, None), height=dp(22), color=(0.9, 0.95, 1, 1)))
+            create_row = BoxLayout(size_hint=(1, None), height=dp(44), spacing=dp(8))
+            self._members_create_group_input = TextInput(hint_text='新团队名称（最多10字）', multiline=False)
+            create_btn = Button(text='创建', size_hint=(None, 1), width=dp(80))
+            create_row.add_widget(self._members_create_group_input)
+            create_row.add_widget(create_btn)
+            box.add_widget(create_row)
+
         top = BoxLayout(size_hint=(1, None), height=dp(44), spacing=dp(8))
         self.members_group_spinner = Spinner(
             text='选择团队',
@@ -547,14 +560,19 @@ class ServerAdminScreen(Screen):
             for g in groups:
                 name = str(g.get('name') or '')
                 code = str(g.get('group_code') or '')
-                if not name:
-                    continue
-                values.append(name)
                 try:
-                    mapping[name] = int(g.get('id'))
-                    code_map[name] = code
+                    gid = int(g.get('id'))
                 except Exception:
                     continue
+                if not name:
+                    name = f"团队{gid}"
+
+                # 显示更多团队信息，便于工程师/管理员下拉滚动查看
+                display = f"{name}  (编号:{gid}  ID:{code})" if code else f"{name}  (编号:{gid})"
+
+                values.append(display)
+                mapping[display] = gid
+                code_map[display] = code
 
             self._members_group_map = mapping
             self._members_group_code_map = code_map
@@ -590,6 +608,45 @@ class ServerAdminScreen(Screen):
 
         self.members_group_spinner.bind(text=on_select)
         refresh_btn.bind(on_press=on_refresh)
+
+        def on_create(*_):
+            if not create_btn:
+                return
+            name = ''
+            try:
+                name = str(getattr(self, '_members_create_group_input', None).text or '').strip()
+            except Exception:
+                name = ''
+
+            if not name:
+                self._popup('提示', '请输入团队名称')
+                return
+
+            if len(name) > 10:
+                name = name[:9] + '.'
+                try:
+                    getattr(self, '_members_create_group_input', None).text = name
+                except Exception:
+                    pass
+
+            def work():
+                try:
+                    resp = self._api().create_group(self._token(), name)
+                    gid = resp.get('id')
+                    code = resp.get('group_code')
+
+                    def ui():
+                        self._popup('创建成功', f'团队编号:{gid}\n团队ID:{code}')
+                        self._load_managed_groups(set_groups, on_err=lambda e: self._popup('错误', str(e)))
+
+                    Clock.schedule_once(lambda *_: ui(), 0)
+                except Exception as e:
+                    Clock.schedule_once(lambda *_, msg=str(e): self._popup('错误', msg), 0)
+
+            Thread(target=work, daemon=True).start()
+
+        if create_btn:
+            create_btn.bind(on_press=on_create)
 
         self._load_managed_groups(set_groups, on_err=lambda e: self._popup('错误', str(e)))
 
@@ -932,8 +989,10 @@ class ServerAdminScreen(Screen):
         title.bind(size=lambda instance, value: setattr(instance, 'text_size', value))
         back_btn = Button(text='返回', size_hint=(None, 1), width=dp(72), background_color=(0.6, 0.6, 0.6, 1))
         back_btn.bind(on_press=lambda *_: self._go_back())
+        clear_btn = Button(text='清理', size_hint=(None, 1), width=dp(72), background_color=(0.9, 0.2, 0.2, 1))
         top.add_widget(title)
         top.add_widget(back_btn)
+        top.add_widget(clear_btn)
         box.add_widget(top)
 
         # 服务器用户总人数（仅工程师可见）：红色标记
@@ -952,6 +1011,116 @@ class ServerAdminScreen(Screen):
             Thread(target=work, daemon=True).start()
 
         _load_user_count()
+
+        def _confirm_popup(title: str, msg: str, on_yes):
+            content = BoxLayout(orientation='vertical', spacing=dp(10), padding=dp(14))
+            label = Label(text=str(msg or ''), color=(1, 1, 1, 1), halign='left', valign='top')
+            label.bind(size=lambda instance, value: setattr(instance, 'text_size', value))
+            content.add_widget(label)
+
+            btn_row = BoxLayout(size_hint=(1, None), height=dp(44), spacing=dp(10))
+            no_btn = Button(text='取消')
+            ok_btn = Button(text='确认', background_color=(0.2, 0.6, 0.8, 1))
+            btn_row.add_widget(no_btn)
+            btn_row.add_widget(ok_btn)
+            content.add_widget(btn_row)
+
+            p = Popup(
+                title=str(title or ''),
+                content=content,
+                size_hint=(0.92, 0.5),
+                background_color=(0.0667, 0.149, 0.3098, 1),
+                background='',
+            )
+            no_btn.bind(on_press=lambda *_: p.dismiss())
+            ok_btn.bind(on_press=lambda *_: (p.dismiss(), on_yes()))
+            p.open()
+
+        def _ask_password_popup(title: str, on_submit):
+            content = BoxLayout(orientation='vertical', spacing=dp(10), padding=dp(14))
+            label = Label(text='请输入密码确认操作：', color=(1, 1, 1, 1), halign='left', valign='middle', size_hint=(1, None), height=dp(26))
+            label.bind(size=lambda instance, value: setattr(instance, 'text_size', value))
+            pwd_in = TextInput(hint_text='密码', password=True, multiline=False, size_hint=(1, None), height=dp(44))
+            content.add_widget(label)
+            content.add_widget(pwd_in)
+
+            btn_row = BoxLayout(size_hint=(1, None), height=dp(44), spacing=dp(10))
+            no_btn = Button(text='取消')
+            ok_btn = Button(text='确认', background_color=(0.9, 0.2, 0.2, 1))
+            btn_row.add_widget(no_btn)
+            btn_row.add_widget(ok_btn)
+            content.add_widget(btn_row)
+
+            p = Popup(
+                title=str(title or ''),
+                content=content,
+                size_hint=(0.92, 0.45),
+                background_color=(0.0667, 0.149, 0.3098, 1),
+                background='',
+            )
+            no_btn.bind(on_press=lambda *_: p.dismiss())
+
+            def _do_submit(*_):
+                pwd = str(pwd_in.text or '').strip()
+                if not pwd:
+                    self._popup('提示', '请输入密码')
+                    return
+                p.dismiss()
+                on_submit(pwd)
+
+            ok_btn.bind(on_press=_do_submit)
+            p.open()
+
+        def _do_clear_all():
+            def submit(pwd: str):
+                def work():
+                    try:
+                        resp = self._api().engineer_wipe_all(self._token(), pwd)
+                        ok = bool(resp.get('ok')) if isinstance(resp, dict) else True
+                        msg = '清理成功' if ok else '清理完成'
+                        Clock.schedule_once(lambda *_: self._popup('结果', msg), 0)
+                        Clock.schedule_once(lambda *_: _load_user_count(), 0)
+                    except Exception as e:
+                        Clock.schedule_once(lambda *_, msg=str(e): self._popup('清理失败', msg), 0)
+
+                Thread(target=work, daemon=True).start()
+
+            _ask_password_popup('清理数据', submit)
+
+        clear_btn.bind(
+            on_press=lambda *_: _confirm_popup(
+                '危险操作',
+                '将清理服务器内所有用户数据（不可恢复）。\n\n是否继续？',
+                _do_clear_all,
+            )
+        )
+
+        # 创建管理员（工程师）：输入基础用户名，系统自动分配可用用户名，默认密码 admin123
+        box.add_widget(Label(text='创建管理员', size_hint=(1, None), height=dp(22), color=(0.9, 0.95, 1, 1)))
+        ca_row = BoxLayout(size_hint=(1, None), height=dp(44), spacing=dp(8))
+        ca_in = TextInput(hint_text='输入基础用户名（例如 admin）', multiline=False, text='admin')
+        ca_btn = Button(text='创建', size_hint=(None, 1), width=dp(80))
+        ca_row.add_widget(ca_in)
+        ca_row.add_widget(ca_btn)
+        box.add_widget(ca_row)
+
+        def _do_create_admin(base: str):
+            def work():
+                try:
+                    data = self._api().engineer_create_admin(self._token(), base_username=base)
+                    uname = str((data or {}).get('username') or '')
+                    pwd = str((data or {}).get('password') or 'admin123')
+                    Clock.schedule_once(lambda *_: self._popup('管理员已创建', f'用户名：{uname}\n默认密码：{pwd}'), 0)
+                except Exception as e:
+                    Clock.schedule_once(lambda *_, msg=str(e): self._popup('创建失败', msg), 0)
+
+            Thread(target=work, daemon=True).start()
+
+        def _on_create_admin(*_):
+            base = str(ca_in.text or '').strip() or 'admin'
+            _confirm_popup('确认', f'是否确认创建管理员？\n\n基础用户名：{base}\n默认密码：admin123', lambda: _do_create_admin(base))
+
+        ca_btn.bind(on_press=_on_create_admin)
 
         # 用户ID查询（仅工程师）：显示用户个人资料、密码哈希、最后登录IP
         box.add_widget(Label(text='用户ID查询', size_hint=(1, None), height=dp(22), color=(0.9, 0.95, 1, 1)))
