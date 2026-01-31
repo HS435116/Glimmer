@@ -18,6 +18,8 @@ Thumbs.db
 
 # Local data
 *.db
+glimmer_client.json
+/settings.json
 
 # Secrets / keystore helpers
 *.b64
@@ -33,4 +35,3 @@ mobile/buildozer - *.txt
 *.apk
 *.aab
 server/public/
-
