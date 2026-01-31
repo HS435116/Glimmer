@@ -814,11 +814,18 @@ def set_ads(
     if user.role not in (Role.engineer, Role.admin):
         raise HTTPException(status_code=403, detail='admin only')
 
+    # 文字广告与图片广告只能二选一
+    t = str(data.text or '').strip()
+    img = str(data.image_url or '').strip()
+    if t and img:
+        raise HTTPException(status_code=400, detail='ad text and image_url cannot both be set')
+
     a = db.execute(select(AdConfig).order_by(AdConfig.id.asc())).scalar_one()
     a.enabled = bool(data.enabled)
-    a.text = data.text
-    a.image_url = data.image_url
+    a.text = t
+    a.image_url = img
     a.link_url = data.link_url
+
     a.scroll_mode = _normalize_scroll_mode(getattr(data, 'scroll_mode', '') or '垂直滚动')
     a.updated_at = datetime.utcnow()
     a.updated_by_user_id = user.id
@@ -862,6 +869,35 @@ def punch(
     punched_at = dt or datetime.utcnow()
     date_str = (dt.strftime('%Y-%m-%d') if dt else _now_date_str())
 
+    # 同一天以“最新打卡时间”为准：若已有记录则更新（避免离线补传产生重复）
+    q = select(Attendance).where(and_(Attendance.user_id == user.id, Attendance.date == date_str))
+    if data.group_id is None:
+        q = q.where(Attendance.group_id.is_(None))
+    else:
+        q = q.where(Attendance.group_id == data.group_id)
+
+    r = db.execute(q.order_by(Attendance.punched_at.desc()).limit(1)).scalar_one_or_none()
+    if r:
+        if punched_at >= (r.punched_at or datetime.min):
+            r.punched_at = punched_at
+            r.status = data.status
+            r.lat = data.lat
+            r.lon = data.lon
+            r.notes = data.notes or ''
+            db.commit()
+            db.refresh(r)
+        # 若客户端时间更旧，则不覆盖服务器上更“新”的记录
+        return PunchOut(
+            id=r.id,
+            date=r.date,
+            punched_at=r.punched_at,
+            status=r.status,
+            group_id=r.group_id,
+            lat=r.lat,
+            lon=r.lon,
+            notes=r.notes,
+        )
+
     r = Attendance(
         user_id=user.id,
         group_id=data.group_id,
@@ -886,6 +922,7 @@ def punch(
         lon=r.lon,
         notes=r.notes,
     )
+
 
 
 @app.get('/attendance/month', response_model=list[PunchOut])

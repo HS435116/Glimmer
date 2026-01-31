@@ -1550,47 +1550,9 @@ class RegisterScreen(Screen):
             Thread(target=work, daemon=True).start()
             return
 
-        # 未配置服务器：仅本地模式（兼容离线使用）
-        security_answer_hash = db._hash_password(security_answer) if hasattr(db, '_hash_password') else security_answer
-        profile = {
-            'real_name': real_name,
-            'phone': phone,
-            'department': department,
-            'security_question': security_question,
-            'security_answer': security_answer_hash,
-        }
+        # 未配置服务器：注册必须走服务器，确保账号/密码与数据互通
+        self.show_popup('提示', '未配置服务器或服务器不可用，无法注册新账号。\n请先在登录页设置服务器地址后再注册。')
 
-        success, message = db.add_user(username, password, profile=profile)
-        if success:
-            try:
-                s = db.get_user_settings(username) or {}
-                s['profile_cache'] = profile_cache
-                db.save_user_settings(username, s)
-            except Exception:
-                pass
-
-            # 本地模式：注册后直接登录进入主界面
-            ok, user_data = db.validate_user(username, password)
-            if ok:
-                app = App.get_running_app()
-                app.current_user = username
-                app.user_data = user_data
-                try:
-                    if hasattr(app, 'api_token'):
-                        delattr(app, 'api_token')
-                    if hasattr(app, 'server_role'):
-                        delattr(app, 'server_role')
-                    if hasattr(app, 'server_url'):
-                        delattr(app, 'server_url')
-                except Exception:
-                    pass
-
-                Clock.schedule_once(lambda *_: self.show_popup('成功', '注册并登录成功'), 0)
-                Clock.schedule_once(lambda *_: setattr(self.manager, 'current', 'main'), 0.2)
-            else:
-                self.show_popup('成功', '注册成功，请返回登录')
-        else:
-            self.show_popup("注册失败", message)
 
 
 

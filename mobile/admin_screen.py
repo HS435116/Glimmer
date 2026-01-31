@@ -1439,14 +1439,26 @@ class AdManagerScreen(Screen):
         self.set_toggle_state(self.ad_bottom_toggle, settings.get('ad_bottom_enabled', False))
 
     def save_settings(self, instance):
+        top_text = self.top_text_input.text.strip()
+        top_img = self.top_image_input.text.strip()
+        bottom_text = self.bottom_text_input.text.strip()
+        bottom_img = self.bottom_image_input.text.strip()
+
+        if top_text and top_img:
+            Popup(title='提示', content=Label(text='顶部广告：文字与图片只能选择一种'), size_hint=(0.86, 0.36), background_color=(0.0667, 0.149, 0.3098, 1), background='').open()
+            return
+        if bottom_text and bottom_img:
+            Popup(title='提示', content=Label(text='底部广告：文字与图片只能选择一种'), size_hint=(0.86, 0.36), background_color=(0.0667, 0.149, 0.3098, 1), background='').open()
+            return
+
         settings = db.get_user_settings('__global__') or {}
         settings.update({
-            'ad_top_text': self.top_text_input.text.strip(),
-            'ad_top_image_url': self.top_image_input.text.strip(),
+            'ad_top_text': top_text,
+            'ad_top_image_url': top_img,
             'ad_top_text_url': self.top_link_input.text.strip(),
             'ad_top_scroll_mode': self.top_scroll_spinner.text,
-            'ad_bottom_text': self.bottom_text_input.text.strip(),
-            'ad_bottom_image_url': self.bottom_image_input.text.strip(),
+            'ad_bottom_text': bottom_text,
+            'ad_bottom_image_url': bottom_img,
             'ad_bottom_text_url': self.bottom_link_input.text.strip(),
             'ad_bottom_scroll_mode': self.bottom_scroll_spinner.text,
             'ad_top_enabled': self.ad_top_toggle.text == '开启',
@@ -1456,6 +1468,7 @@ class AdManagerScreen(Screen):
         popup = Popup(title='成功', content=Label(text='广告设置已保存'), size_hint=(0.8, 0.4), background_color=(0.0667, 0.149, 0.3098, 1), background='')
 
         popup.open()
+
 
 
     def go_back(self, instance):

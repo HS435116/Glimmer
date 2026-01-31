@@ -37,6 +37,7 @@ from kivy.uix.image import AsyncImage
 from kivy.uix.textinput import TextInput
 from kivy.clock import Clock
 from kivy.metrics import dp
+from kivy.core.window import Window
 from kivy.graphics import Color, Rectangle, RoundedRectangle
 from kivy.utils import platform as kivy_platform
 
@@ -170,41 +171,62 @@ class MainScreen(Screen):
         
         # 打卡区域
 
-        punch_card_area = BoxLayout(orientation='vertical', size_hint=(1, 0.4), padding=dp(20), spacing=dp(15))
-        
+        punch_card_area = BoxLayout(
+            orientation='vertical',
+            size_hint=(1, None),
+            padding=[dp(18), dp(14), dp(18), dp(14)],
+            spacing=dp(10),
+        )
+        self.punch_card_area = punch_card_area
+        punch_card_area.bind(minimum_height=punch_card_area.setter('height'))
+
         # 当前状态显示
         self.status_label = Label(
             text='准备打卡',
             font_size=dp(18),
             bold=True,
-            color=(0.95, 0.97, 1, 1)
+            color=(0.95, 0.97, 1, 1),
+            size_hint=(1, None),
+            height=dp(34),
         )
-        
+
         # 位置信息显示
         self.location_label = Label(
             text='位置: 等待获取...',
             font_size=dp(14),
-            color=(0.82, 0.88, 0.95, 1)
+            color=(0.82, 0.88, 0.95, 1),
+            size_hint=(1, None),
+            height=dp(24),
         )
 
         # 范围状态提示
         self.range_status_label = Label(
             text='范围状态: 未获取',
             font_size=dp(14),
-            color=(0.82, 0.88, 0.95, 1)
+            color=(0.82, 0.88, 0.95, 1),
+            size_hint=(1, None),
+            height=dp(24),
         )
 
         
-        # 打卡按钮
+        # 打卡按钮（根据屏幕高度自适应）
         self.punch_btn = StyledButton(
             text='立即打卡',
             background_color=(0.2, 0.8, 0.2, 1)
         )
+        self.punch_btn.size_hint = (1, None)
 
         self.punch_btn.bind(on_press=self.punch_card)
+
+        try:
+            Window.bind(size=self._update_punch_button_layout)
+        except Exception:
+            pass
+        Clock.schedule_once(self._update_punch_button_layout, 0)
         
         # 自动打卡开关
-        auto_punch_layout = BoxLayout(size_hint=(1, 0.2), spacing=dp(10))
+        auto_punch_layout = BoxLayout(size_hint=(1, None), height=dp(42), spacing=dp(10))
+        self.auto_punch_layout = auto_punch_layout
         auto_punch_layout.add_widget(Label(text='自动打卡:', font_size=dp(14), color=(0.92, 0.95, 1, 1)))
 
         
@@ -250,8 +272,9 @@ class MainScreen(Screen):
         main_layout.add_widget(records_header)
 
         
-        # 滚动视图容器
-        scroll_view = ScrollView(size_hint=(1, 0.45))
+        # 滚动视图容器（占据剩余空间，避免底部广告位变高后挤压错位）
+        scroll_view = ScrollView(size_hint=(1, 1))
+
         
         # 记录列表容器
         self.records_layout = GridLayout(cols=1, spacing=dp(5), size_hint_y=None)
@@ -260,8 +283,9 @@ class MainScreen(Screen):
         scroll_view.add_widget(self.records_layout)
         main_layout.add_widget(scroll_view)
 
-        # 底部广告位
-        self.ad_bottom = BoxLayout(size_hint=(1, None), height=dp(60), padding=dp(10))
+        # 底部广告位（图片广告时：无内边距，铺满容器）
+        self.ad_bottom = BoxLayout(size_hint=(1, None), height=dp(60), padding=[0, 0, 0, 0])
+
 
         main_layout.add_widget(self.ad_bottom)
         
@@ -320,7 +344,7 @@ class MainScreen(Screen):
             # 管理员提醒：补录申请/聊天消息等
             self._start_admin_notice_polling()
 
-            # 聊天提醒：未读聊天消息上线后通过“公告”提醒
+            # 聊天提醒：未读聊天消息上线后通过"公告"提醒
             self._start_chat_notice_polling()
 
 
@@ -1108,6 +1132,56 @@ class MainScreen(Screen):
 
 
 
+    def _update_punch_button_layout(self, *_args):
+        # 让“立即打卡”在不同机型上有足够的可点击高度
+        try:
+            h = float(getattr(Window, 'height', 0) or 0)
+        except Exception:
+            h = 0
+
+        if h and h < 650:
+            ratio = 0.095
+            btn_min, btn_max = dp(52), dp(72)
+            status_fs, info_fs = dp(16), dp(12)
+            status_h, info_h = dp(30), dp(22)
+            auto_h = dp(40)
+        elif h and h < 900:
+            ratio = 0.088
+            btn_min, btn_max = dp(54), dp(78)
+            status_fs, info_fs = dp(18), dp(13)
+            status_h, info_h = dp(34), dp(24)
+            auto_h = dp(42)
+        else:
+            ratio = 0.082
+            btn_min, btn_max = dp(56), dp(82)
+            status_fs, info_fs = dp(20), dp(14)
+            status_h, info_h = dp(38), dp(26)
+            auto_h = dp(44)
+
+        target_h = h * ratio if h else dp(62)
+        target_h = max(btn_min, min(btn_max, target_h))
+
+        try:
+            # 按钮高度与字体
+            self.punch_btn.height = target_h
+            self.punch_btn.font_size = max(dp(15), min(dp(22), target_h * 0.33))
+
+            # 文字区域高度与字体，避免挤压导致重叠
+            self.status_label.font_size = status_fs
+            self.location_label.font_size = info_fs
+            self.range_status_label.font_size = info_fs
+
+            self.status_label.height = status_h
+            self.location_label.height = info_h
+            self.range_status_label.height = info_h
+
+            apl = getattr(self, 'auto_punch_layout', None)
+            if apl is not None:
+                apl.height = auto_h
+        except Exception:
+            pass
+
+
     def update_ad_visibility(self):
 
         """根据管理员广告设置显示广告位"""
@@ -1124,6 +1198,16 @@ class MainScreen(Screen):
         container.clear_widgets()
         self.stop_marquee(position)
         container.size_hint = (1, None)
+
+        # 清理旧的点击绑定，避免重复触发
+        try:
+            cb = getattr(container, '_ad_touch_cb', None)
+            if cb:
+                container.unbind(on_touch_down=cb)
+                container._ad_touch_cb = None
+        except Exception:
+            pass
+
         if not enabled:
             container.height = 0
             container.opacity = 0
@@ -1133,20 +1217,30 @@ class MainScreen(Screen):
         container.height = dp(60)
         container.opacity = 1
         container.disabled = False
+        # 默认留出内边距；图片广告（底部）会在后面改为 0 以铺满
+        try:
+            container.padding = dp(10)
+        except Exception:
+            pass
 
 
-        text = settings.get(f'ad_{position}_text', '')
-        image_url = settings.get(f'ad_{position}_image_url', '')
-        link_url = settings.get(f'ad_{position}_text_url', '')
-        scroll_mode = settings.get(f'ad_{position}_scroll_mode', '静止')
+
+        text = str(settings.get(f'ad_{position}_text', '') or '').strip()
+        image_url = str(settings.get(f'ad_{position}_image_url', '') or '').strip()
+        link_url = str(settings.get(f'ad_{position}_text_url', '') or '').strip()
+        scroll_mode = str(settings.get(f'ad_{position}_scroll_mode', '静止') or '静止')
         # 兼容旧值："等待" 作为静止展示处理
         if scroll_mode == '等待':
             scroll_mode = '静止'
 
+        # 互斥：文字广告与图片广告只能显示一种（若两者都有，默认以图片为准）
+        if image_url:
+            text = ''
 
         if not text and not image_url:
             container.add_widget(Label(text='广告位已开启', color=(1, 1, 1, 1)))
             return
+
 
         safe_image_url = image_url if self.is_safe_url(image_url) else ''
         safe_link_url = link_url if self.is_safe_url(link_url) else ''
@@ -1156,13 +1250,38 @@ class MainScreen(Screen):
             return
 
         if image_url:
+            # 图片广告：底部固定铺满显示，不展示文字
+            if position == 'bottom':
+                # 底部图片广告：固定高度，宽度自适应
+                container.padding = [0, 0, 0, 0]
+                container.height = dp(60)
+
+                img = AsyncImage(
+                    source=safe_image_url,
+                    allow_stretch=True,
+                    keep_ratio=False,
+                    size_hint=(1, None),
+                    height=container.height,
+                )
+
+                if safe_link_url:
+                    def handle_touch(_instance, touch):
+                        if container.collide_point(*touch.pos):
+                            self.confirm_open_link(safe_link_url)
+                            return True
+                        return False
+
+                    container._ad_touch_cb = handle_touch
+                    container.bind(on_touch_down=handle_touch)
+
+                container.add_widget(img)
+                return
+
+            # 其它位置：图片也优先展示，不拼接文字
             content = BoxLayout(orientation='horizontal', spacing=dp(8), padding=[dp(4), 0])
-            image = AsyncImage(source=safe_image_url, size_hint=(None, 1), width=dp(50))
+            image = AsyncImage(source=safe_image_url, allow_stretch=True, keep_ratio=True, size_hint=(None, 1), width=dp(60))
             content.add_widget(image)
-            if text:
-                content.add_widget(Label(text=text, color=(1, 1, 1, 1), halign='left', valign='middle'))
-            else:
-                content.add_widget(Label(text='广告图片', color=(1, 1, 1, 1)))
+            content.add_widget(Label(text='广告图片', color=(1, 1, 1, 1)))
 
             if safe_link_url:
                 def handle_touch(instance, touch):
@@ -1175,6 +1294,7 @@ class MainScreen(Screen):
 
             container.add_widget(content)
             return
+
 
 
         if scroll_mode in ('水平滚动', '垂直滚动'):
@@ -1584,7 +1704,15 @@ class MainScreen(Screen):
         app = App.get_running_app()
         if not hasattr(app, 'current_user'):
             return False
+        # 多端互通：在线时先把服务器当月记录同步到本地缓存，再渲染（离线仍可看）
+        try:
+            month_key = datetime.now().strftime('%Y-%m')
+            self._sync_attendance_month_from_server(month_key)
+        except Exception:
+            pass
+
         records = db.get_user_attendance(app.current_user)
+
         today = self.get_today_str()
         return any(record.get('date') == today for record in records)
 
@@ -1602,7 +1730,15 @@ class MainScreen(Screen):
         if not hasattr(app, 'current_user'):
             return False
         today = self.get_today_str()
+        # 多端互通：在线时先把服务器当月记录同步到本地缓存，再渲染（离线仍可看）
+        try:
+            month_key = datetime.now().strftime('%Y-%m')
+            self._sync_attendance_month_from_server(month_key)
+        except Exception:
+            pass
+
         records = db.get_user_attendance(app.current_user)
+
         return any(
             record.get('date') == today and record.get('status') in ('打卡成功', '补录')
             for record in records
@@ -1786,7 +1922,7 @@ class MainScreen(Screen):
                     'longitude': settings.get('longitude')
                 }
 
-        # Android 端强制使用“新鲜”的 GPS 定位（避免用到很久之前的缓存坐标）
+        # Android 端强制使用"新鲜"的 GPS 定位（避免用到很久之前的缓存坐标）
         if kivy_platform == 'android':
             last_fix = getattr(self, '_gps_last_fix_ts', 0) or 0
             if (not self.current_location) or (not last_fix) or (time.time() - float(last_fix) > 120):
@@ -2168,8 +2304,94 @@ class MainScreen(Screen):
                 self.set_auto_punch_state(False, save=False)
 
 
-    
+    def _sync_attendance_month_from_server(self, month: str):
+        """将服务器当月打卡记录同步到本机缓存（用于多端数据互通/离线可看）。"""
+        month = str(month or '').strip()
+        if not month:
+            return
+
+        # 限流：避免每次刷新都请求
+        now_ts = time.time()
+        last = getattr(self, '_attendance_month_sync_last', None) or {}
+        if last.get('month') == month and now_ts - float(last.get('ts') or 0) < 25:
+            return
+
+        if getattr(self, '_attendance_month_sync_inflight', False):
+            return
+
+        app = App.get_running_app()
+        token = str(getattr(app, 'api_token', '') or '')
+        base_url = str(getattr(app, 'server_url', '') or get_server_url() or '').strip()
+        if not token or not base_url:
+            return
+
+        self._attendance_month_sync_inflight = True
+        self._attendance_month_sync_last = {'month': month, 'ts': now_ts}
+
+        def work():
+            try:
+                api = GlimmerAPI(base_url)
+                if not api.health():
+                    return
+
+                items = api.attendance_month(token, month)
+                username = str(getattr(app, 'current_user', '') or '')
+                user_id = ''
+                try:
+                    user_id = str((getattr(app, 'user_data', {}) or {}).get('user_id') or '')
+                except Exception:
+                    user_id = ''
+
+                # 写入本机缓存：key 使用 server_{id}，避免重复
+                store = getattr(db, 'attendance_store', None)
+                if not store or not hasattr(store, 'put'):
+                    return
+
+                for it in (items or []):
+                    try:
+                        sid = it.get('id')
+                        key = f"server_{sid}"
+                        punched_at = str(it.get('punched_at') or '')
+                        date_str = str(it.get('date') or punched_at[:10] or '')
+                        status = str(it.get('status') or '')
+                        lat = it.get('lat', None)
+                        lon = it.get('lon', None)
+                        notes = str(it.get('notes') or '')
+
+                        loc = ''
+                        try:
+                            if lat is not None and lon is not None:
+                                loc = f"{float(lat):.6f}, {float(lon):.6f}"
+                        except Exception:
+                            loc = ''
+
+                        store.put(
+                            key,
+                            user_id=user_id or str(username),
+                            username=username,
+                            status=status,
+                            location=loc,
+                            notes=notes,
+                            timestamp=punched_at or datetime.now().isoformat(),
+                            date=date_str,
+                            server_synced=True,
+                            server_synced_at=datetime.now().isoformat(timespec='seconds'),
+                            server_sync_error='',
+                        )
+                    except Exception:
+                        continue
+
+                Clock.schedule_once(lambda *_: self.load_attendance_records(), 0)
+            except Exception:
+                return
+            finally:
+                self._attendance_month_sync_inflight = False
+
+        Thread(target=work, daemon=True).start()
+
+
     def load_attendance_records(self):
+
         """加载整个月打卡记录"""
         # 清空现有记录
         self.records_layout.clear_widgets()
@@ -2178,7 +2400,15 @@ class MainScreen(Screen):
         if not hasattr(app, 'current_user'):
             return
         
+        # 多端互通：在线时先把服务器当月记录同步到本地缓存，再渲染（离线仍可看）
+        try:
+            month_key = datetime.now().strftime('%Y-%m')
+            self._sync_attendance_month_from_server(month_key)
+        except Exception:
+            pass
+
         records = db.get_user_attendance(app.current_user)
+
         record_map = {}
         for record in records:
             record_date = record.get('date')

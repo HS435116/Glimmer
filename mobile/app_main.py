@@ -506,7 +506,7 @@ class AttendanceApp(App):
             self._pip_close_btn = Button(
                 text='关闭',
                 size_hint=(None, None),
-                size=(dp(72), dp(40)),
+                size=(dp(50), dp(40)),
                 pos_hint={'right': 0.995, 'top': 0.995},
                 background_color=(0.85, 0.2, 0.2, 1),
             )

@@ -1257,6 +1257,13 @@ class ServerAdminScreen(Screen):
         img = (self.ad_img.text or '').strip()
         link = (self.ad_link.text or '').strip()
 
+        if text and img:
+            self._popup('提示', '文字广告和图片广告只能选择一种')
+            return
+        if not text and not img:
+            self._popup('提示', '请输入广告文字或图片URL')
+            return
+
         def work():
             try:
                 sel = ''
@@ -1282,6 +1289,12 @@ class ServerAdminScreen(Screen):
                     s['ad_bottom_text'] = text
                     s['ad_bottom_image_url'] = img
                     s['ad_bottom_text_url'] = link
+
+                    # 互斥：只保留一种
+                    if img:
+                        s['ad_bottom_text'] = ''
+                    if text:
+                        s['ad_bottom_image_url'] = ''
                     sel = ''
                     try:
                         sel = str(getattr(self, 'ad_scroll_spinner', None).text or '')
