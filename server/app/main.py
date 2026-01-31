@@ -693,8 +693,8 @@ def post_global_announcement(
     if user.role not in (Role.engineer, Role.admin):
         raise HTTPException(status_code=403, detail='admin only')
 
-    if len((data.content or '').encode('utf-8')) > 2000:
-        raise HTTPException(status_code=400, detail='announcement content too long (max 2000 bytes)')
+    if len(data.content or '') > 3500:
+        raise HTTPException(status_code=400, detail='announcement content too long (max 3500 chars)')
 
     a = Announcement(scope=AnnouncementScope.global_, group_id=None, title=data.title, content=data.content, created_by_user_id=user.id)
 
@@ -713,8 +713,9 @@ def post_group_announcement(
 ):
     _require_group_admin(db, user, group_id)
 
-    if len((data.content or '').encode('utf-8')) > 2000:
-        raise HTTPException(status_code=400, detail='announcement content too long (max 2000 bytes)')
+    if len(data.content or '') > 3500:
+        raise HTTPException(status_code=400, detail='announcement content too long (max 3500 chars)')
+
 
     a = Announcement(scope=AnnouncementScope.group, group_id=group_id, title=data.title, content=data.content, created_by_user_id=user.id)
 

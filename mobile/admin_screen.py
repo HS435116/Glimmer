@@ -736,13 +736,11 @@ class AdminScreen(Screen):
             self.show_popup("错误", "请输入公告内容")
             return
 
-        try:
-            b = len((text or '').encode('utf-8'))
-        except Exception:
-            b = len(text or '')
-        if b > 2000:
-            self.show_popup('提示', f'公告内容过长（{b}字节），最大2000字节，请精简后再发布')
+        c = len(text or '')
+        if c > 3500:
+            self.show_popup('提示', f'公告内容过长（{c}字），最大3500字，请精简后再发布')
             return
+
 
 
         def apply_publish():
