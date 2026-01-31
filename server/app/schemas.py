@@ -189,6 +189,10 @@ class PunchIn(BaseModel):
     lon: float | None = None
     notes: str = ''
 
+    # 客户端时间（用于“打卡时间以手机实际时间为准”）
+    # 允许传入 ISO 格式：2026-01-30T09:12:00 或 2026-01-30 09:12:00
+    client_time: str | None = None
+
 
 class PunchOut(BaseModel):
     id: int

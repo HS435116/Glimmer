@@ -951,6 +951,14 @@ class ServerAdminScreen(Screen):
             self._popup('提示', '请输入标题和内容')
             return
 
+        try:
+            b = len((content or '').encode('utf-8'))
+        except Exception:
+            b = len(content or '')
+        if b > 2000:
+            self._popup('提示', f'公告内容过长（{b}字节），最大2000字节，请精简后再发布')
+            return
+
         role = self._role()
 
         def work():

@@ -693,7 +693,11 @@ def post_global_announcement(
     if user.role not in (Role.engineer, Role.admin):
         raise HTTPException(status_code=403, detail='admin only')
 
+    if len((data.content or '').encode('utf-8')) > 2000:
+        raise HTTPException(status_code=400, detail='announcement content too long (max 2000 bytes)')
+
     a = Announcement(scope=AnnouncementScope.global_, group_id=None, title=data.title, content=data.content, created_by_user_id=user.id)
+
     db.add(a)
     db.commit()
     db.refresh(a)
@@ -708,7 +712,12 @@ def post_group_announcement(
     user: Annotated[User, Depends(get_current_user)],
 ):
     _require_group_admin(db, user, group_id)
+
+    if len((data.content or '').encode('utf-8')) > 2000:
+        raise HTTPException(status_code=400, detail='announcement content too long (max 2000 bytes)')
+
     a = Announcement(scope=AnnouncementScope.group, group_id=group_id, title=data.title, content=data.content, created_by_user_id=user.id)
+
     db.add(a)
     db.commit()
     db.refresh(a)
@@ -835,16 +844,34 @@ def punch(
         if not db.execute(select(Membership.id).where(and_(Membership.user_id == user.id, Membership.group_id == data.group_id))).first():
             raise HTTPException(status_code=403, detail='not in group')
 
+    # 以客户端时间为准（若客户端未传，则回退到服务器时间）
+    dt = None
+    try:
+        raw = str(getattr(data, 'client_time', None) or '').strip()
+        if raw:
+            # 兼容 "YYYY-MM-DD HH:MM:SS" / "YYYY-MM-DDTHH:MM:SS"
+            raw2 = raw.replace('T', ' ')
+            try:
+                dt = datetime.fromisoformat(raw2)
+            except Exception:
+                dt = datetime.fromisoformat(raw)
+    except Exception:
+        dt = None
+
+    punched_at = dt or datetime.utcnow()
+    date_str = (dt.strftime('%Y-%m-%d') if dt else _now_date_str())
+
     r = Attendance(
         user_id=user.id,
         group_id=data.group_id,
-        punched_at=datetime.utcnow(),
-        date=_now_date_str(),
+        punched_at=punched_at,
+        date=date_str,
         status=data.status,
         lat=data.lat,
         lon=data.lon,
         notes=data.notes or '',
     )
+
     db.add(r)
     db.commit()
     db.refresh(r)

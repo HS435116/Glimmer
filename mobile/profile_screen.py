@@ -14,6 +14,7 @@ from kivy.uix.label import Label
 from kivy.uix.popup import Popup
 from kivy.uix.screenmanager import Screen
 from kivy.uix.textinput import TextInput
+from kivy.uix.scrollview import ScrollView
 from kivy.graphics import Color, Rectangle
 
 from glimmer_api import GlimmerAPI
@@ -51,8 +52,11 @@ class ProfileScreen(Screen):
         top.add_widget(right_box)
         root.add_widget(top)
 
-        self.info = BoxLayout(orientation='vertical', spacing=dp(8), size_hint=(1, 1))
-        root.add_widget(self.info)
+        scroll = ScrollView(size_hint=(1, 1), bar_width=dp(2))
+        self.info = BoxLayout(orientation='vertical', spacing=dp(8), size_hint=(1, None), padding=[dp(2), dp(2)])
+        self.info.bind(minimum_height=self.info.setter('height'))
+        scroll.add_widget(self.info)
+        root.add_widget(scroll)
 
         self.add_widget(root)
 

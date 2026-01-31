@@ -321,6 +321,7 @@ class GlimmerAPI:
         lon: float | None = None,
         notes: str = '',
         group_id: int | None = None,
+        client_time: str | None = None,
     ) -> dict[str, Any]:
         payload = {
             'group_id': (int(group_id) if group_id is not None else None),
@@ -328,6 +329,7 @@ class GlimmerAPI:
             'lat': (float(lat) if lat is not None else None),
             'lon': (float(lon) if lon is not None else None),
             'notes': str(notes or ''),
+            'client_time': (str(client_time).strip() if client_time else None),
         }
         r = requests.post(
             self._url('/attendance/punch'),

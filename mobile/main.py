@@ -446,10 +446,22 @@ class LoginScreen(Screen):
         )
         about_btn.bind(on_press=self.show_about_popup)
 
-        btn_row = BoxLayout(size_hint=(None, 1), width=dp(112), spacing=dp(6))
+        share_btn = Button(
+            text='分享',
+            size_hint=(None, 1),
+            width=dp(52),
+            font_size=dp(12),
+            background_color=(0.15, 0.28, 0.5, 1),
+            color=(1, 1, 1, 1)
+        )
+        share_btn.bind(on_press=self.share_to_wechat)
+
+        btn_row = BoxLayout(size_hint=(None, 1), width=dp(170), spacing=dp(6))
         btn_row.add_widget(self.announcement_btn)
         btn_row.add_widget(about_btn)
+        btn_row.add_widget(share_btn)
         top_row.add_widget(btn_row)
+
 
 
 
@@ -716,11 +728,17 @@ class LoginScreen(Screen):
         title = f"公告时间：{time_text}" if time_text else "公告"
 
         content.add_widget(Label(text=title, color=(0.9, 0.95, 1, 1)))
-        message = Label(text=text, halign='left', valign='top', color=(1, 1, 1, 1))
-        message.bind(size=lambda instance, value: setattr(instance, 'text_size', value))
-        content.add_widget(message)
+
+        # 公告内容：滚动展示，避免字数过多导致布局/渲染异常
+        msg_scroll = ScrollView(size_hint=(1, 1), bar_width=dp(2))
+        message = Label(text=text, halign='left', valign='top', color=(1, 1, 1, 1), size_hint=(1, None))
+        message.bind(size=lambda instance, value: setattr(instance, 'text_size', (value[0], None)))
+        message.bind(texture_size=lambda instance, value: setattr(instance, 'height', value[1]))
+        msg_scroll.add_widget(message)
+        content.add_widget(msg_scroll)
 
         close_btn = Button(text='关闭', size_hint=(1, None), height=dp(44), background_color=(0.2, 0.6, 0.8, 1))
+
         content.add_widget(close_btn)
 
         popup = Popup(title='公告提醒', content=content, size_hint=(0.88, 0.5), background_color=(0.0667, 0.149, 0.3098, 1), background='')
@@ -754,8 +772,49 @@ class LoginScreen(Screen):
         popup = Popup(title='关于', content=content, size_hint=(0.88, 0.72), background_color=(0.0667, 0.149, 0.3098, 1), background='')
         popup.open()
 
+    def share_to_wechat(self, *_):
+        # 微信分享：Android 使用 Intent 调起微信分享；其它平台给出提示
+        try:
+            if kivy_platform != 'android':
+                self.show_popup('提示', '微信分享仅支持安卓设备')
+                return
+
+            try:
+                from jnius import autoclass, cast
+            except Exception:
+                self.show_popup('提示', '分享组件不可用（缺少 jnius）')
+                return
+
+            Intent = autoclass('android.content.Intent')
+            PythonActivity = autoclass('org.kivy.android.PythonActivity')
+            String = autoclass('java.lang.String')
+
+            activity = PythonActivity.mActivity
+            pm = activity.getPackageManager()
+
+            # 检测微信是否安装
+            try:
+                pm.getPackageInfo('com.tencent.mm', 0)
+            except Exception:
+                self.show_popup('提示', '未检测到微信，请先安装微信')
+                return
+
+            share_text = '晨曦智能打卡：团队考勤打卡应用（请在服务器内下载/安装最新版本）'
+
+            intent = Intent()
+            intent.setAction(Intent.ACTION_SEND)
+            intent.setType('text/plain')
+            intent.putExtra(Intent.EXTRA_TEXT, String(share_text))
+            intent.setPackage('com.tencent.mm')
+
+            chooser = Intent.createChooser(intent, cast('java.lang.CharSequence', String('分享到微信')))
+            activity.startActivity(chooser)
+        except Exception as e:
+            self.show_popup('分享失败', str(e))
+
 
     def update_logo_size(self, *args):
+
         if not self.logo_image:
             return
         container = self.logo_container
@@ -1439,19 +1498,53 @@ class RegisterScreen(Screen):
             def work():
                 try:
                     api = get_api()
+                    if not api.health():
+                        raise RuntimeError('服务器维护中，请稍后再试。。。')
+
                     api.register(username, password, real_name, phone, department, security_question, security_answer)
+
+                    # 注册成功后：自动登录并进入主界面
+                    token = api.login(username, password)
+                    me = api.me(token) or {}
+                    role = str(me.get('role') or 'user')
+
+                    app = App.get_running_app()
+                    app.server_url = server_url
+                    app.api_token = token
+                    app.server_role = role
+                    app.current_user = username
+                    app.user_data = {
+                        'role': role,
+                        'is_admin': role in ('admin', 'engineer'),
+                        'user_id': str(me.get('id') or ''),
+                    }
+
+                    try:
+                        client_store.put('auth', username=username, token=token, role=role, server_url=server_url)
+                    except Exception:
+                        pass
 
                     # 本机仅缓存个人资料（不保存密码/密保答案）
                     try:
                         s = db.get_user_settings(username) or {}
-                        s['profile_cache'] = profile_cache
+                        profile_cache2 = dict(profile_cache or {})
+                        profile_cache2['user_id'] = str(me.get('id') or '')
+                        s['profile_cache'] = profile_cache2
                         db.save_user_settings(username, s)
                     except Exception:
                         pass
 
-                    Clock.schedule_once(lambda *_: self.show_popup("成功", "注册成功！请返回登录"), 0)
+                    def _go(*_):
+                        try:
+                            self.manager.current = 'main'
+                        except Exception:
+                            pass
+
+                    Clock.schedule_once(lambda *_: self.show_popup('成功', '注册并登录成功'), 0)
+                    Clock.schedule_once(_go, 0.2)
                 except Exception as e:
                     Clock.schedule_once(lambda *_, msg=str(e): self.show_popup("注册失败", msg), 0)
+
 
 
             Thread(target=work, daemon=True).start()
@@ -1475,9 +1568,30 @@ class RegisterScreen(Screen):
                 db.save_user_settings(username, s)
             except Exception:
                 pass
-            self.show_popup("成功", "注册成功！请返回登录")
+
+            # 本地模式：注册后直接登录进入主界面
+            ok, user_data = db.validate_user(username, password)
+            if ok:
+                app = App.get_running_app()
+                app.current_user = username
+                app.user_data = user_data
+                try:
+                    if hasattr(app, 'api_token'):
+                        delattr(app, 'api_token')
+                    if hasattr(app, 'server_role'):
+                        delattr(app, 'server_role')
+                    if hasattr(app, 'server_url'):
+                        delattr(app, 'server_url')
+                except Exception:
+                    pass
+
+                Clock.schedule_once(lambda *_: self.show_popup('成功', '注册并登录成功'), 0)
+                Clock.schedule_once(lambda *_: setattr(self.manager, 'current', 'main'), 0.2)
+            else:
+                self.show_popup('成功', '注册成功，请返回登录')
         else:
             self.show_popup("注册失败", message)
+
 
 
 

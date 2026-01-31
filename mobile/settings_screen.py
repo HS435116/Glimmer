@@ -18,8 +18,10 @@ from kivy.uix.button import Button
 from kivy.uix.spinner import Spinner
 from kivy.uix.popup import Popup
 from kivy.uix.anchorlayout import AnchorLayout
+from kivy.uix.scrollview import ScrollView
 
 from kivy.clock import Clock
+
 
 
 
@@ -36,105 +38,127 @@ class SettingsScreen(Screen):
     """设置界面"""
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-
+        
+        # 添加背景颜色
         with self.canvas.before:
-            Color(0.0667, 0.149, 0.3098, 1)
-            self.bg_rect = RoundedRectangle(pos=self.pos, size=self.size, radius=[0])
+            Color(0.0667, 0.149, 0.3098, 1)  # 设置背景颜色（深蓝色）
+            self.bg_rect = RoundedRectangle(pos=self.pos, size=self.size, radius=[0])  # 创建圆角矩形背景
+        
+        # 绑定位置和大小变化事件，确保背景随界面变化
         self.bind(pos=self.update_bg, size=self.update_bg)
         
-        # 主布局
-        main_layout = BoxLayout(orientation='vertical', padding=dp(20), spacing=dp(15))
-
-
-
-        # 内容容器
-        scroll_content = BoxLayout(orientation='vertical', spacing=dp(15), size_hint=(1, 1))
-
-
-
-
-
-
-
-
-
-        # 位置设置
-        location_group = self.create_setting_group("位置设置")
+        # 创建主布局容器：垂直排列的BoxLayout（更适配小屏）
+        main_layout = BoxLayout(orientation='vertical', padding=dp(12), spacing=dp(10))
+        
+        # 创建内容容器（用于滚动）：ScrollView + GridLayout（更稳定，不易挤压错位）
+        scroll = ScrollView(size_hint=(1, 1), bar_width=dp(2), do_scroll_x=False)
+        scroll_content = GridLayout(cols=1, spacing=dp(12), padding=[0, 0, 0, dp(10)], size_hint=(1, None))
+        scroll_content.bind(minimum_height=scroll_content.setter('height'))
+        scroll.add_widget(scroll_content)
 
         
-        # 纬度输入
-        lat_layout = BoxLayout(size_hint=(1, None), height=dp(50), spacing=dp(10))
-        lat_layout.add_widget(Label(text='纬度:', size_hint=(0.3, 1), color=(1, 1, 1, 1)))
+        # 创建位置设置组
+        location_group = self.create_setting_group("位置设置")
+        
+        # --- 纬度输入部分 ---
+        # 创建纬度输入布局：水平排列，固定高度50dp
+        lat_layout = BoxLayout(size_hint=(1, None), height=dp(44), spacing=dp(8))
 
+        lat_label = Label(text='纬度', size_hint=(None, 1), width=dp(96), color=(0.92, 0.96, 1, 1), halign='left', valign='middle')
+        lat_label.bind(size=lambda i, v: setattr(i, 'text_size', v))
+        lat_layout.add_widget(lat_label)
+        
+        # 创建纬度输入框
         self.lat_input = TextInput(
             hint_text='例如: 31.2304',
             multiline=False,
-            size_hint=(0.7, 1),
+            size_hint=(1, 1),
             input_filter='float',
-            padding=[dp(10), dp(12), dp(14), dp(14)]
+            padding=[dp(10), dp(12), dp(10), dp(10)],
         )
-
-
+        
+        # 将纬度输入框添加到布局
         lat_layout.add_widget(self.lat_input)
+        
+        # 将纬度输入布局添加到位置设置组
         location_group.add_widget(lat_layout)
         
-        # 经度输入
-        lon_layout = BoxLayout(size_hint=(1, None), height=dp(50), spacing=dp(10))
-        lon_layout.add_widget(Label(text='经度:', size_hint=(0.3, 1), color=(1, 1, 1, 1)))
+        # --- 经度输入部分 ---
+        # 创建经度输入布局：水平排列，固定高度50dp
+        lon_layout = BoxLayout(size_hint=(1, None), height=dp(44), spacing=dp(8))
 
+        lon_label = Label(text='经度', size_hint=(None, 1), width=dp(96), color=(0.92, 0.96, 1, 1), halign='left', valign='middle')
+        lon_label.bind(size=lambda i, v: setattr(i, 'text_size', v))
+        lon_layout.add_widget(lon_label)
+        
+        # 创建经度输入框
         self.lon_input = TextInput(
             hint_text='例如: 121.4737',
             multiline=False,
-            size_hint=(0.7, 1),
+            size_hint=(1, 1),
             input_filter='float',
-            padding=[dp(10), dp(12), dp(10), dp(8)]
+            padding=[dp(10), dp(12), dp(10), dp(10)],
         )
-
-
+        
+        # 将经度输入框添加到布局
         lon_layout.add_widget(self.lon_input)
+        
+        # 将经度输入布局添加到位置设置组
         location_group.add_widget(lon_layout)
         
-        # 半径输入
-        radius_layout = BoxLayout(size_hint=(1, None), height=dp(50), spacing=dp(10))
-        radius_layout.add_widget(Label(text='打卡半径(米):', size_hint=(0.3, 1), color=(1, 1, 1, 1)))
+        # --- 半径输入部分 ---
+        # 创建半径输入布局：水平排列，固定高度50dp
+        radius_layout = BoxLayout(size_hint=(1, None), height=dp(44), spacing=dp(8))
 
+        radius_label = Label(text='半径(米)', size_hint=(None, 1), width=dp(110), color=(0.92, 0.96, 1, 1), halign='left', valign='middle')
+        radius_label.bind(size=lambda i, v: setattr(i, 'text_size', v))
+        radius_layout.add_widget(radius_label)
+        
+        # 创建半径输入框
         self.radius_input = TextInput(
             hint_text='例如: 100',
             multiline=False,
-            size_hint=(0.7, 1),
+            size_hint=(1, 1),
             input_filter='int',
-            padding=[dp(10), dp(12), dp(10), dp(8)]
+            padding=[dp(10), dp(12), dp(10), dp(10)],
         )
-
-
+        
+        # 将半径输入框添加到布局
         radius_layout.add_widget(self.radius_input)
+        
+        # 将半径输入布局添加到位置设置组
         location_group.add_widget(radius_layout)
+        
+        # 注意：这里还需要将location_group添加到scroll_content，
+        # 然后将scroll_content添加到main_layout，
+        # 最后将main_layout添加到屏幕
 
         # 自动识别位置
-        auto_location_layout = BoxLayout(size_hint=(1, None), height=dp(50), spacing=dp(10))
-        auto_location_layout.add_widget(Label(text='自动识别位置:', size_hint=(0.24, 1), color=(1, 1, 1, 1)))
+        auto_location_layout = BoxLayout(size_hint=(1, None), height=dp(44), spacing=dp(10))
+        auto_location_label = Label(text='自动识别位置', size_hint=(1, 1), color=(0.92, 0.96, 1, 1), halign='left', valign='middle')
+        auto_location_label.bind(size=lambda i, v: setattr(i, 'text_size', v))
+        auto_location_layout.add_widget(auto_location_label)
 
-        self.auto_location_switch = Button(text='开启', background_color=(0.2, 0.8, 0.2, 1), size_hint=(None, 1), width=dp(90))
+        self.auto_location_switch = Button(text='开启', background_color=(0.2, 0.8, 0.2, 1), size_hint=(None, 1), width=dp(96))
         self.auto_location_switch.bind(on_press=self.toggle_auto_location)
         auto_location_layout.add_widget(self.auto_location_switch)
         location_group.add_widget(auto_location_layout)
-
-
         
         scroll_content.add_widget(location_group)
-
         
         # 时间设置
         time_group = self.create_setting_group("时间设置")
-        
-        # 开始时间
-        start_time_layout = BoxLayout(size_hint=(1, None), height=dp(50), spacing=dp(10))
-        start_time_layout.add_widget(Label(text='打卡开始时间:', size_hint=(0.3, 1), color=(1, 1, 1, 1)))
+                # 开始时间
+        start_time_layout = BoxLayout(size_hint=(1, None), height=dp(44), spacing=dp(10))
+        start_lb = Label(text='开始时间', size_hint=(None, 1), width=dp(110), color=(0.92, 0.96, 1, 1), halign='left', valign='middle')
+        start_lb.bind(size=lambda i, v: setattr(i, 'text_size', v))
+        start_time_layout.add_widget(start_lb)
 
         self.start_time_input = TextInput(
             hint_text='例如: 09:00',
             multiline=False,
-            size_hint=(0.7, 1)
+            size_hint=(1, 1),
+            padding=[dp(10), dp(12), dp(10), dp(10)],
         )
 
 
@@ -142,13 +166,16 @@ class SettingsScreen(Screen):
         time_group.add_widget(start_time_layout)
         
         # 结束时间
-        end_time_layout = BoxLayout(size_hint=(1, None), height=dp(50), spacing=dp(10))
-        end_time_layout.add_widget(Label(text='打卡结束时间:', size_hint=(0.3, 1), color=(1, 1, 1, 1)))
+        end_time_layout = BoxLayout(size_hint=(1, None), height=dp(44), spacing=dp(10))
+        end_lb = Label(text='结束时间', size_hint=(None, 1), width=dp(110), color=(0.92, 0.96, 1, 1), halign='left', valign='middle')
+        end_lb.bind(size=lambda i, v: setattr(i, 'text_size', v))
+        end_time_layout.add_widget(end_lb)
 
         self.end_time_input = TextInput(
             hint_text='例如: 10:00',
             multiline=False,
-            size_hint=(0.7, 1)
+            size_hint=(1, 1),
+            padding=[dp(10), dp(12), dp(10), dp(10)],
         )
 
 
@@ -160,14 +187,13 @@ class SettingsScreen(Screen):
         # 自动打卡设置
         auto_group = self.create_setting_group("自动打卡设置")
         
-        auto_switch_layout = BoxLayout(size_hint=(1, None), height=dp(50), spacing=dp(10))
-        auto_switch_layout.add_widget(Label(text='启用自动打卡:', size_hint=(0.3, 1), color=(1, 1, 1, 1)))
+        auto_switch_layout = BoxLayout(size_hint=(1, None), height=dp(44), spacing=dp(10))
+        auto_lb = Label(text='启用自动打卡', size_hint=(1, 1), color=(0.92, 0.96, 1, 1), halign='left', valign='middle')
+        auto_lb.bind(size=lambda i, v: setattr(i, 'text_size', v))
+        auto_switch_layout.add_widget(auto_lb)
 
         
-        self.auto_switch = Button(
-            text='开启',
-            background_color=(0.2, 0.8, 0.2, 1)
-        )
+        self.auto_switch = Button(text='开启', background_color=(0.2, 0.8, 0.2, 1), size_hint=(None, 1), width=dp(96))
 
         self.auto_switch.bind(on_press=self.toggle_auto_switch)
         auto_switch_layout.add_widget(self.auto_switch)
@@ -176,35 +202,28 @@ class SettingsScreen(Screen):
         scroll_content.add_widget(auto_group)
 
 
-        # 按钮区域
-        button_layout = BoxLayout(size_hint=(1, None), height=dp(70), spacing=dp(10))
+        # 按钮区域（窄屏自动切换为纵向堆叠，避免文字挤压错位）
+        self._button_layout = BoxLayout(size_hint=(1, None), height=dp(56), spacing=dp(10), orientation='horizontal')
 
-
-        
         # 保存按钮
         save_btn = StyledButton(text='保存设置')
         save_btn.bind(on_press=self.save_settings)
-        
+
         # 使用当前位置按钮
-        use_current_btn = StyledButton(
-            text='使用当前位置',
-            background_color=(0.2, 0.6, 0.8, 1)
-        )
+        use_current_btn = StyledButton(text='使用当前位置', background_color=(0.2, 0.6, 0.8, 1))
         use_current_btn.bind(on_press=self.use_current_location)
-        
+
         # 返回按钮
-        back_btn = StyledButton(
-            text='返回主界面',
-            background_color=(0.8, 0.8, 0.8, 1)
-        )
+        back_btn = StyledButton(text='返回主界面', background_color=(0.8, 0.8, 0.8, 1))
         back_btn.bind(on_press=self.go_back)
-        
-        button_layout.add_widget(save_btn)
-        button_layout.add_widget(use_current_btn)
-        button_layout.add_widget(back_btn)
-        
-        main_layout.add_widget(scroll_content)
-        main_layout.add_widget(button_layout)
+
+        self._button_layout.add_widget(save_btn)
+        self._button_layout.add_widget(use_current_btn)
+        self._button_layout.add_widget(back_btn)
+
+        main_layout.add_widget(scroll)
+        main_layout.add_widget(self._button_layout)
+
 
 
 
@@ -213,25 +232,48 @@ class SettingsScreen(Screen):
 
         
         self.add_widget(main_layout)
-        
+
+        # 响应式：根据窗口宽度自动调整底部按钮布局
+        self.bind(size=self._update_responsive_layout)
+        Clock.schedule_once(self._update_responsive_layout, 0)
+
         # 加载现有设置
         Clock.schedule_once(self.load_settings, 0.1)
     
     def create_setting_group(self, title):
-        """创建设置组"""
-        group = BoxLayout(orientation='vertical', spacing=dp(10))
-        
-        # 兼容小屏/主题：时间设置分组不显示标题，避免“标题看不清/占位影响布局”
-        if str(title or '') != '时间设置':
-            title_label = Label(
-                text=title,
-                size_hint=(1, None),
-                height=dp(30),
-                color=(1, 1, 1, 1)
+        """创建设置组（自适应小屏：卡片式容器 + 可选标题）"""
+        group = BoxLayout(
+            orientation='vertical',
+            spacing=dp(10),
+            padding=dp(12),
+            size_hint=(1, None),
+        )
+        group.bind(minimum_height=group.setter('height'))
 
+        with group.canvas.before:
+            Color(0.10, 0.22, 0.42, 0.55)
+            group._bg = RoundedRectangle(pos=group.pos, size=group.size, radius=[dp(12)])
+
+        def _upd(*_):
+            group._bg.pos = group.pos
+            group._bg.size = group.size
+
+        group.bind(pos=_upd, size=_upd)
+
+        title_text = str(title or '').strip()
+        if title_text:
+            title_label = Label(
+                text=title_text,
+                size_hint=(1, None),
+                height=dp(24),
+                color=(1, 1, 1, 1),
+                halign='left',
+                valign='middle',
+                bold=True,
             )
+            title_label.bind(size=lambda i, v: setattr(i, 'text_size', v))
             group.add_widget(title_label)
-        
+
         return group
 
     
@@ -311,7 +353,34 @@ class SettingsScreen(Screen):
         self.bg_rect.pos = self.pos
         self.bg_rect.size = self.size
 
-    
+
+    def _update_responsive_layout(self, *_):
+        """根据窗口宽度自适应底部按钮布局（横排/竖排）。"""
+        bl = getattr(self, '_button_layout', None)
+        if not bl:
+            return
+
+        narrow = self.width < dp(420)
+
+        if narrow:
+            bl.orientation = 'vertical'
+            bl.height = dp(44) * 3 + dp(10) * 2
+            for child in bl.children:
+                try:
+                    child.size_hint_y = None
+                    child.height = dp(44)
+                except Exception:
+                    pass
+        else:
+            bl.orientation = 'horizontal'
+            bl.height = dp(56)
+            for child in bl.children:
+                try:
+                    child.size_hint_y = 1
+                except Exception:
+                    pass
+
+
     def persist_auto_punch(self, auto_on):
         app = App.get_running_app()
         if not hasattr(app, 'current_user'):

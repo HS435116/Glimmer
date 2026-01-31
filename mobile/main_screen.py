@@ -507,7 +507,9 @@ class MainScreen(Screen):
                     if tag and tag not in notes:
                         notes = (notes + ' ' + tag).strip()
 
-                    api.punch_attendance(token, status=status, lat=lat, lon=lon, notes=notes, group_id=None)
+                    client_time = str(rec.get('timestamp') or '').strip() or None
+                    api.punch_attendance(token, status=status, lat=lat, lon=lon, notes=notes, group_id=None, client_time=client_time)
+
 
                     if rid and hasattr(db, 'mark_attendance_synced'):
                         db.mark_attendance_synced(rid, True, '')
@@ -965,9 +967,14 @@ class MainScreen(Screen):
                 content = BoxLayout(orientation='vertical', spacing=dp(12), padding=dp(20))
                 title = f"公告时间：{time_text}" if time_text else "公告"
                 content.add_widget(Label(text=title, color=(0.9, 0.95, 1, 1)))
-                message = Label(text=text, halign='left', valign='top', color=(1, 1, 1, 1))
-                message.bind(size=lambda instance, value: setattr(instance, 'text_size', value))
-                content.add_widget(message)
+
+                msg_scroll = ScrollView(size_hint=(1, 1), bar_width=dp(2))
+                message = Label(text=text, halign='left', valign='top', color=(1, 1, 1, 1), size_hint=(1, None))
+                message.bind(size=lambda instance, value: setattr(instance, 'text_size', (value[0], None)))
+                message.bind(texture_size=lambda instance, value: setattr(instance, 'height', value[1]))
+                msg_scroll.add_widget(message)
+                content.add_widget(msg_scroll)
+
 
                 close_btn = Button(text='关闭', size_hint=(1, None), height=dp(44), background_color=(0.2, 0.6, 0.8, 1))
                 content.add_widget(close_btn)
@@ -1029,9 +1036,14 @@ class MainScreen(Screen):
             content = BoxLayout(orientation='vertical', spacing=dp(12), padding=dp(20))
             title = f"公告时间：{time_text}" if time_text else "公告"
             content.add_widget(Label(text=title, color=(0.9, 0.95, 1, 1)))
-            message = Label(text=text, halign='left', valign='top', color=(1, 1, 1, 1))
-            message.bind(size=lambda instance, value: setattr(instance, 'text_size', value))
-            content.add_widget(message)
+
+            msg_scroll = ScrollView(size_hint=(1, 1), bar_width=dp(2))
+            message = Label(text=text, halign='left', valign='top', color=(1, 1, 1, 1), size_hint=(1, None))
+            message.bind(size=lambda instance, value: setattr(instance, 'text_size', (value[0], None)))
+            message.bind(texture_size=lambda instance, value: setattr(instance, 'height', value[1]))
+            msg_scroll.add_widget(message)
+            content.add_widget(msg_scroll)
+
 
             btn_row = BoxLayout(size_hint=(1, None), height=dp(44), spacing=dp(10))
             close_btn = Button(text='关闭', background_color=(0.2, 0.6, 0.8, 1))
