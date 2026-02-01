@@ -65,12 +65,113 @@ except Exception:  # pragma: no cover
 
     notification = _NotificationFallback()
 
+
+def safe_notify(title: str = '', message: str = '', timeout: int = 3):
+    """Android 12+ 兼容的通知封装：避免 PendingIntent 缺少可变性标志导致异常。
+
+    - Android：使用原生 Notification + PendingIntent.FLAG_IMMUTABLE
+    - 其它平台：尽量走 plyer.notification
+    """
+    title = str(title or '')
+    message = str(message or '')
+    try:
+        timeout = int(timeout or 3)
+    except Exception:
+        timeout = 3
+
+    if kivy_platform != 'android':
+        try:
+            notification.notify(title=title, message=message, timeout=timeout)
+        except Exception:
+            pass
+        return
+
+    # Android 端：使用原生 Notification，显式指定 PendingIntent 可变性
+    try:
+        from jnius import autoclass, cast
+
+        PythonActivity = autoclass('org.kivy.android.PythonActivity')
+        Context = autoclass('android.content.Context')
+        BuildVERSION = autoclass('android.os.Build$VERSION')
+        NotificationManager = autoclass('android.app.NotificationManager')
+        NotificationChannel = autoclass('android.app.NotificationChannel')
+        NotificationBuilder = autoclass('android.app.Notification$Builder')
+        PendingIntent = autoclass('android.app.PendingIntent')
+
+        activity = PythonActivity.mActivity
+        sdk = int(getattr(BuildVERSION, 'SDK_INT', 0) or 0)
+
+        nm = cast('android.app.NotificationManager', activity.getSystemService(Context.NOTIFICATION_SERVICE))
+        channel_id = 'glimmer_notice'
+
+        if sdk >= 26:
+            importance = int(getattr(NotificationManager, 'IMPORTANCE_DEFAULT', 3) or 3)
+            try:
+                ch = NotificationChannel(channel_id, '通知', importance)
+                nm.createNotificationChannel(ch)
+            except Exception:
+                pass
+            builder = NotificationBuilder(activity, channel_id)
+        else:
+            builder = NotificationBuilder(activity)
+
+        # 点击通知回到应用
+        try:
+            pm = activity.getPackageManager()
+            launch_intent = pm.getLaunchIntentForPackage(activity.getPackageName())
+        except Exception:
+            launch_intent = None
+
+        if launch_intent is not None:
+            flags = int(getattr(PendingIntent, 'FLAG_UPDATE_CURRENT', 0) or 0)
+            if sdk >= 23:
+                flags |= int(getattr(PendingIntent, 'FLAG_IMMUTABLE', 0) or 0)
+            pi = PendingIntent.getActivity(activity, 0, launch_intent, flags)
+            try:
+                builder.setContentIntent(pi)
+            except Exception:
+                pass
+
+        # 基础样式
+        try:
+            builder.setContentTitle(title)
+            builder.setContentText(message)
+            builder.setAutoCancel(True)
+        except Exception:
+            pass
+
+        try:
+            Drawable = autoclass('android.R$drawable')
+            builder.setSmallIcon(int(getattr(Drawable, 'ic_dialog_info')))
+        except Exception:
+            pass
+
+        # build
+        try:
+            notif = builder.build() if sdk >= 16 else builder.getNotification()
+        except Exception:
+            notif = builder.build()
+
+        # 生成一个尽量不冲突的 id
+        nid = int(datetime.now().timestamp() * 1000) % 2147483647
+        nm.notify(int(nid), notif)
+        return
+
+    except Exception:
+        # 兜底：仍然尝试 plyer（若 plyer 版本过旧，可能会失败，但不应影响主流程）
+        try:
+            notification.notify(title=title, message=message, timeout=timeout)
+        except Exception:
+            pass
+
+
 import hashlib
 import hmac
 import base64
 import uuid
 import math
 import webbrowser
+import requests
 
 
 
@@ -684,7 +785,7 @@ class LoginScreen(Screen):
         if not message:
             return
         try:
-            notification.notify(
+            safe_notify(
                 title='公告提醒',
                 message=message,
                 timeout=3
@@ -775,7 +876,7 @@ class LoginScreen(Screen):
         popup.open()
 
     def share_to_wechat(self, *_):
-        # 分享下载链接（超链接）：优先调起微信；失败则展示可点击链接
+        # 优化体验：安卓端优先“应用内下载 APK -> 直接分享到微信文件”，避免打开浏览器下载。
         base_url = str(get_server_url() or '').strip().rstrip('/')
         if base_url and not base_url.startswith('http'):
             base_url = 'http://' + base_url
@@ -822,33 +923,160 @@ class LoginScreen(Screen):
             show_link_popup('分享下载链接')
             return
 
-        # 安卓：优先拉起微信分享；失败则回退弹窗
         try:
             from jnius import autoclass, cast
 
             Intent = autoclass('android.content.Intent')
             PythonActivity = autoclass('org.kivy.android.PythonActivity')
             String = autoclass('java.lang.String')
+            Uri = autoclass('android.net.Uri')
+            File = autoclass('java.io.File')
+            StrictMode = autoclass('android.os.StrictMode')
 
             activity = PythonActivity.mActivity
             pm = activity.getPackageManager()
 
-            # 检测微信是否安装
+            # 目标文件：放到 app 专属 external files（无需存储权限）
             try:
-                pm.getPackageInfo('com.tencent.mm', 0)
+                ext_dir = activity.getExternalFilesDir(None)
+                base_dir = str(ext_dir.getAbsolutePath()) if ext_dir is not None else str(activity.getFilesDir().getAbsolutePath())
             except Exception:
-                show_link_popup('未检测到微信，复制链接下载')
-                return
+                base_dir = str(activity.getFilesDir().getAbsolutePath())
 
-            intent = Intent()
-            intent.setAction(Intent.ACTION_SEND)
-            intent.setType('text/plain')
-            intent.putExtra(Intent.EXTRA_TEXT, String(share_text))
-            intent.setPackage('com.tencent.mm')
+            apk_path = os.path.join(base_dir, 'glimmer_app.apk')
+            tmp_path = apk_path + '.download'
 
-            chooser = Intent.createChooser(intent, cast('java.lang.CharSequence', String('分享到微信')))
-            activity.startActivity(chooser)
+            cancel_flag = {'stop': False}
+
+            content = BoxLayout(orientation='vertical', spacing=dp(10), padding=dp(18))
+            info = Label(text='正在准备安装包（应用内下载，不打开浏览器）...', color=(1, 1, 1, 1), halign='left', valign='middle')
+            info.bind(size=lambda i, v: setattr(i, 'text_size', v))
+            progress = Label(text='0%', color=(0.9, 0.95, 1, 1), size_hint=(1, None), height=dp(22))
+            content.add_widget(info)
+            content.add_widget(progress)
+
+            btn_row = BoxLayout(size_hint=(1, None), height=dp(44), spacing=dp(10))
+            cancel_btn = Button(text='取消', background_color=(0.6, 0.6, 0.6, 1))
+            link_btn = Button(text='改为分享链接', background_color=(0.2, 0.6, 0.8, 1))
+            btn_row.add_widget(cancel_btn)
+            btn_row.add_widget(link_btn)
+            content.add_widget(btn_row)
+
+            popup = Popup(title='分享', content=content, size_hint=(0.9, 0.42), background_color=(0.0667, 0.149, 0.3098, 1), background='')
+
+            def do_cancel(*_):
+                cancel_flag['stop'] = True
+                try:
+                    popup.dismiss()
+                except Exception:
+                    pass
+
+            cancel_btn.bind(on_press=do_cancel)
+            link_btn.bind(on_press=lambda *_: (do_cancel(), show_link_popup('分享下载链接')))
+            popup.open()
+
+            def share_file(path: str):
+                try:
+                    # 规避 Android 7+ file:// 共享限制（企业内部分发场景）：避免 FileUriExposedException
+                    try:
+                        VmPolicyBuilder = autoclass('android.os.StrictMode$VmPolicy$Builder')
+                        StrictMode.setVmPolicy(VmPolicyBuilder().build())
+                    except Exception:
+                        pass
+
+                    f = File(str(path))
+                    uri = Uri.fromFile(f)
+
+                    intent = Intent()
+                    intent.setAction(Intent.ACTION_SEND)
+                    intent.setType('application/vnd.android.package-archive')
+                    intent.putExtra(Intent.EXTRA_STREAM, uri)
+                    intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+
+                    # 若安装了微信，直接分享到微信；否则走系统分享面板
+                    has_wechat = True
+                    try:
+                        pm.getPackageInfo('com.tencent.mm', 0)
+                    except Exception:
+                        has_wechat = False
+
+                    if has_wechat:
+                        intent.setPackage('com.tencent.mm')
+                        chooser = Intent.createChooser(intent, cast('java.lang.CharSequence', String('分享到微信')))
+                    else:
+                        chooser = Intent.createChooser(intent, cast('java.lang.CharSequence', String('分享安装包')))
+
+                    activity.startActivity(chooser)
+                except Exception:
+                    # 兜底：分享失败则回退为链接分享
+                    show_link_popup('分享下载链接')
+
+            def work():
+                try:
+                    r = requests.get(download_url, stream=True, timeout=12)
+                    if getattr(r, 'status_code', 0) != 200:
+                        raise RuntimeError(f"下载失败（HTTP {getattr(r, 'status_code', 0)}）")
+
+                    total = 0
+                    try:
+                        total = int(r.headers.get('content-length') or 0)
+                    except Exception:
+                        total = 0
+
+                    got = 0
+                    with open(tmp_path, 'wb') as f:
+                        for chunk in r.iter_content(chunk_size=256 * 1024):
+                            if cancel_flag['stop']:
+                                try:
+                                    f.close()
+                                except Exception:
+                                    pass
+                                try:
+                                    if os.path.exists(tmp_path):
+                                        os.remove(tmp_path)
+                                except Exception:
+                                    pass
+                                return
+
+                            if not chunk:
+                                continue
+                            f.write(chunk)
+                            got += len(chunk)
+
+                            if total > 0:
+                                pct = int(got * 100 / total)
+                                Clock.schedule_once(lambda *_d, p=pct: setattr(progress, 'text', f"{p}%"), 0)
+
+                    try:
+                        if os.path.exists(apk_path):
+                            os.remove(apk_path)
+                    except Exception:
+                        pass
+                    try:
+                        os.replace(tmp_path, apk_path)
+                    except Exception:
+                        # fallback rename
+                        os.rename(tmp_path, apk_path)
+
+                    def ui_done(_dt):
+                        try:
+                            popup.dismiss()
+                        except Exception:
+                            pass
+                        share_file(apk_path)
+
+                    Clock.schedule_once(ui_done, 0)
+
+                except Exception:
+                    try:
+                        Clock.schedule_once(lambda *_: (popup.dismiss(), show_link_popup('分享下载链接')), 0)
+                    except Exception:
+                        pass
+
+            Thread(target=work, daemon=True).start()
+
         except Exception:
+            # 无 jnius/安卓能力：回退链接分享
             show_link_popup('分享下载链接')
 
 

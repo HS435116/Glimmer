@@ -54,7 +54,7 @@ except Exception:  # pragma: no cover
 
     notification = _NotificationFallback()
 
-from main import StyledButton, db, get_server_url
+from main import StyledButton, db, get_server_url, safe_notify
 
 
 import math
@@ -467,10 +467,7 @@ class MainScreen(Screen):
                             last_created = created_at
 
                         # 系统通知（尽量不打断用户）
-                        try:
-                            notification.notify(title=title, message=content[:120], timeout=3)
-                        except Exception:
-                            pass
+                        safe_notify(title=title, message=content[:120], timeout=3)
                     except Exception:
                         continue
 
@@ -827,7 +824,7 @@ class MainScreen(Screen):
             return
 
         if user_settings.get('last_notified_version') != latest_version:
-            notification.notify(
+            safe_notify(
                 title='版本升级提醒',
                 message=f"检测到新版本 {latest_version}，请及时升级",
                 timeout=3
@@ -1006,7 +1003,7 @@ class MainScreen(Screen):
         message = (text or '').strip()
         if not message:
             return
-        notification.notify(
+        safe_notify(
             title='公告提醒',
             message=message,
             timeout=3
@@ -2092,7 +2089,7 @@ class MainScreen(Screen):
         if t >= dt_time(7, 30) and not has_in:
             if str(settings.get('last_checkin_remind_date') or '') != today:
                 try:
-                    notification.notify(title='打卡提醒', message='请记得打卡上班', timeout=3)
+                    safe_notify(title='打卡提醒', message='请记得打卡上班', timeout=3)
                 except Exception:
                     pass
                 settings['last_checkin_remind_date'] = today
@@ -2100,7 +2097,7 @@ class MainScreen(Screen):
         if t >= dt_time(20, 0) and has_in and not has_out:
             if str(settings.get('last_checkout_remind_date') or '') != today:
                 try:
-                    notification.notify(title='打卡提醒', message='请记得打卡下班', timeout=3)
+                    safe_notify(title='打卡提醒', message='请记得打卡下班', timeout=3)
                 except Exception:
                     pass
                 settings['last_checkout_remind_date'] = today
@@ -2339,7 +2336,7 @@ class MainScreen(Screen):
 
         # 通知 + 公告
         try:
-            notification.notify(title=f"{role_text}打卡成功", message=f"{role_text}打卡已完成", timeout=2)
+            safe_notify(title=f"{role_text}打卡成功", message=f"{role_text}打卡已完成", timeout=2)
         except Exception:
             pass
 
@@ -2546,7 +2543,7 @@ class MainScreen(Screen):
 
                     def ui_ok():
                         try:
-                            notification.notify(title='补录申请已提交', message='管理员将审核您的补录申请', timeout=2)
+                            safe_notify(title='补录申请已提交', message='管理员将审核您的补录申请', timeout=2)
                         except Exception:
                             pass
                         popup.dismiss()

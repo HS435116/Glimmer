@@ -1,0 +1,15 @@
+---
+description: 
+alwaysApply: true
+enabled: true
+updatedAt: 2026-02-01T23:02:56.914Z
+provider: 
+---
+
+# Android 12+ 通知兼容性
+
+- 在移动端代码中，不要直接调用 `plyer.notification.notify`。
+- 统一使用 `mobile/main.py` 中的 `safe_notify(title, message, timeout)`：
+  - Android 端使用原生 `Notification` + `PendingIntent.FLAG_IMMUTABLE`，避免 Android 12+ 报错："PendingIntent 缺少可变性标志"。
+  - 非 Android 端再回退到 `plyer.notification.notify`。
+- 新增通知调用点时，优先调用 `safe_notify`（例如公告提醒、版本升级提醒、打卡提醒等）。
