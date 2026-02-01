@@ -121,6 +121,9 @@ class GroupScreen(Screen):
         Clock.schedule_once(lambda *_: self.refresh(), 0)
 
     def show_popup(self, title: str, message: str):
+        if str(title or '') == '错误':
+            message = '服务器正在维护中，请稍后......'
+
         msg = str(message or '')
         align = 'left' if ('\n' in msg or len(msg) > 18) else 'center'
         valign = 'top' if align == 'left' else 'middle'

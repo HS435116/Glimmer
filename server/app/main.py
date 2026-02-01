@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import random
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time as dt_time
 
 from pathlib import Path
 from typing import Annotated
@@ -282,6 +282,11 @@ def _startup():
                     conn.exec_driver_sql("ALTER TABLE users ADD COLUMN last_login DATETIME")
                 if 'last_login_ip' not in ucols:
                     conn.exec_driver_sql("ALTER TABLE users ADD COLUMN last_login_ip VARCHAR(64) DEFAULT ''")
+
+                # attendance.punch_type（支持同日上/下班两次）
+                acols = [r[1] for r in conn.exec_driver_sql("PRAGMA table_info('attendance')").fetchall()]
+                if 'punch_type' not in acols:
+                    conn.exec_driver_sql("ALTER TABLE attendance ADD COLUMN punch_type VARCHAR(16) DEFAULT ''")
 
         except Exception:
             pass
@@ -852,6 +857,14 @@ def punch(
         if not db.execute(select(Membership.id).where(and_(Membership.user_id == user.id, Membership.group_id == data.group_id))).first():
             raise HTTPException(status_code=403, detail='not in group')
 
+    def _norm_punch_type(v: str | None) -> str:
+        x = str(v or '').strip().lower()
+        if x in ('checkin', 'in', 'start', '上班', '上班打卡'):
+            return 'checkin'
+        if x in ('checkout', 'out', 'end', '下班', '下班打卡'):
+            return 'checkout'
+        return ''
+
     # 以客户端时间为准（若客户端未传，则回退到服务器时间）
     dt = None
     try:
@@ -869,33 +882,75 @@ def punch(
     punched_at = dt or datetime.utcnow()
     date_str = (dt.strftime('%Y-%m-%d') if dt else _now_date_str())
 
-    # 同一天以“最新打卡时间”为准：若已有记录则更新（避免离线补传产生重复）
-    q = select(Attendance).where(and_(Attendance.user_id == user.id, Attendance.date == date_str))
+    # 同日最多两次有效打卡：上班(checkin)一次、下班(checkout)一次。
+    # 兼容旧数据：punch_type 为空视为 checkin。
+    base_q = select(Attendance).where(and_(Attendance.user_id == user.id, Attendance.date == date_str))
     if data.group_id is None:
-        q = q.where(Attendance.group_id.is_(None))
+        base_q = base_q.where(Attendance.group_id.is_(None))
     else:
-        q = q.where(Attendance.group_id == data.group_id)
+        base_q = base_q.where(Attendance.group_id == data.group_id)
 
-    r = db.execute(q.order_by(Attendance.punched_at.desc()).limit(1)).scalar_one_or_none()
-    if r:
-        if punched_at >= (r.punched_at or datetime.min):
-            r.punched_at = punched_at
-            r.status = data.status
-            r.lat = data.lat
-            r.lon = data.lon
-            r.notes = data.notes or ''
+    checkin_row = db.execute(
+        base_q.where(or_(Attendance.punch_type == 'checkin', Attendance.punch_type == '')).order_by(Attendance.punched_at.desc()).limit(1)
+    ).scalar_one_or_none()
+    checkout_row = db.execute(
+        base_q.where(Attendance.punch_type == 'checkout').order_by(Attendance.punched_at.desc()).limit(1)
+    ).scalar_one_or_none()
+
+    # 推断 punch_type（兼容旧客户端未传 punch_type）
+    punch_type = _norm_punch_type(getattr(data, 'punch_type', None))
+    if not punch_type:
+        t = punched_at.time()
+        if t < dt_time(8, 0, 0):
+            punch_type = 'checkin'
+        elif t >= dt_time(20, 0, 0):
+            punch_type = 'checkout'
+        else:
+            # 08:00-20:00：若已上班未下班，则判定为下班，否则判定为上班
+            if checkin_row and not checkout_row:
+                punch_type = 'checkout'
+            else:
+                punch_type = 'checkin'
+
+    if punch_type not in ('checkin', 'checkout'):
+        raise HTTPException(status_code=400, detail='bad punch_type')
+
+    # 禁止时间倒流：同一用户同一天的新打卡时间，不允许早于当天已存在的最新时间。
+    latest_row = None
+    if checkin_row and checkout_row:
+        latest_row = checkin_row if (checkin_row.punched_at or datetime.min) >= (checkout_row.punched_at or datetime.min) else checkout_row
+    else:
+        latest_row = checkin_row or checkout_row
+
+    if latest_row and punched_at < (latest_row.punched_at or datetime.min):
+        raise HTTPException(status_code=400, detail='client_time cannot be earlier than last punch')
+
+    # 下班不得早于上班
+    if punch_type == 'checkout' and checkin_row and punched_at < (checkin_row.punched_at or datetime.min):
+        raise HTTPException(status_code=400, detail='checkout cannot be earlier than checkin')
+
+    # 按(用户+日期+group+类型) upsert
+    target = checkin_row if punch_type == 'checkin' else checkout_row
+    if target:
+        if punched_at >= (target.punched_at or datetime.min):
+            target.punched_at = punched_at
+            target.punch_type = punch_type
+            target.status = data.status
+            target.lat = data.lat
+            target.lon = data.lon
+            target.notes = (data.notes or '')[:200]
             db.commit()
-            db.refresh(r)
-        # 若客户端时间更旧，则不覆盖服务器上更“新”的记录
+            db.refresh(target)
         return PunchOut(
-            id=r.id,
-            date=r.date,
-            punched_at=r.punched_at,
-            status=r.status,
-            group_id=r.group_id,
-            lat=r.lat,
-            lon=r.lon,
-            notes=r.notes,
+            id=target.id,
+            date=target.date,
+            punched_at=target.punched_at,
+            punch_type=str(getattr(target, 'punch_type', '') or ''),
+            status=target.status,
+            group_id=target.group_id,
+            lat=target.lat,
+            lon=target.lon,
+            notes=target.notes,
         )
 
     r = Attendance(
@@ -903,10 +958,11 @@ def punch(
         group_id=data.group_id,
         punched_at=punched_at,
         date=date_str,
+        punch_type=punch_type,
         status=data.status,
         lat=data.lat,
         lon=data.lon,
-        notes=data.notes or '',
+        notes=(data.notes or '')[:200],
     )
 
     db.add(r)
@@ -916,6 +972,7 @@ def punch(
         id=r.id,
         date=r.date,
         punched_at=r.punched_at,
+        punch_type=str(getattr(r, 'punch_type', '') or ''),
         status=r.status,
         group_id=r.group_id,
         lat=r.lat,
@@ -940,7 +997,20 @@ def attendance_month(
         .order_by(Attendance.punched_at.desc())
         .limit(400)
     ).scalars().all()
-    return [PunchOut(id=r.id, date=r.date, punched_at=r.punched_at, status=r.status, group_id=r.group_id, lat=r.lat, lon=r.lon, notes=r.notes) for r in rows]
+    return [
+        PunchOut(
+            id=r.id,
+            date=r.date,
+            punched_at=r.punched_at,
+            punch_type=str(getattr(r, 'punch_type', '') or ''),
+            status=r.status,
+            group_id=r.group_id,
+            lat=r.lat,
+            lon=r.lon,
+            notes=r.notes,
+        )
+        for r in rows
+    ]
 
 
 @app.get('/admin/users/{target_user_id}/attendance/month', response_model=list[PunchOut])
@@ -979,7 +1049,20 @@ def admin_attendance_month(
         .order_by(Attendance.punched_at.desc())
         .limit(400)
     ).scalars().all()
-    return [PunchOut(id=r.id, date=r.date, punched_at=r.punched_at, status=r.status, group_id=r.group_id, lat=r.lat, lon=r.lon, notes=r.notes) for r in rows]
+    return [
+        PunchOut(
+            id=r.id,
+            date=r.date,
+            punched_at=r.punched_at,
+            punch_type=str(getattr(r, 'punch_type', '') or ''),
+            status=r.status,
+            group_id=r.group_id,
+            lat=r.lat,
+            lon=r.lon,
+            notes=r.notes,
+        )
+        for r in rows
+    ]
 
 
 

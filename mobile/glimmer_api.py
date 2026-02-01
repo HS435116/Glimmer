@@ -322,9 +322,11 @@ class GlimmerAPI:
         notes: str = '',
         group_id: int | None = None,
         client_time: str | None = None,
+        punch_type: str | None = None,
     ) -> dict[str, Any]:
         payload = {
             'group_id': (int(group_id) if group_id is not None else None),
+            'punch_type': (str(punch_type).strip() if punch_type else None),
             'status': str(status or '打卡成功'),
             'lat': (float(lat) if lat is not None else None),
             'lon': (float(lon) if lon is not None else None),

@@ -174,6 +174,10 @@ class Attendance(Base):
 
     punched_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
     date: Mapped[str] = mapped_column(String(10), index=True)
+
+    # 打卡类型：checkin / checkout（同日最多两次有效打卡：上班一次、下班一次）
+    punch_type: Mapped[str] = mapped_column(String(16), default='', index=True)
+
     status: Mapped[str] = mapped_column(String(40), default='打卡成功')
 
     lat: Mapped[float | None] = mapped_column(Float, nullable=True)

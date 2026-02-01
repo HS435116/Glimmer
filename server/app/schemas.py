@@ -184,6 +184,13 @@ class ChatUnreadOut(BaseModel):
 
 class PunchIn(BaseModel):
     group_id: int | None = None
+
+    # 打卡类型：
+    # - checkin: 上班打卡
+    # - checkout: 下班打卡
+    # 兼容旧客户端：为空时服务端会按时间规则推断
+    punch_type: str | None = None
+
     status: str = '打卡成功'
     lat: float | None = None
     lon: float | None = None
@@ -198,6 +205,9 @@ class PunchOut(BaseModel):
     id: int
     date: str
     punched_at: datetime
+
+    punch_type: str = ''
+
     status: str
     group_id: int | None
     lat: float | None

@@ -341,6 +341,9 @@ class MainScreen(Screen):
             # 离线补传：连接主服务器后自动同步历史打卡记录
             self._start_attendance_sync_polling()
 
+            # 网络状态监听：从离线->在线时立即触发一次同步/刷新
+            self._start_network_monitoring()
+
             # 管理员提醒：补录申请/聊天消息等
             self._start_admin_notice_polling()
 
@@ -486,6 +489,55 @@ class MainScreen(Screen):
         Clock.schedule_once(lambda *_: self._trigger_attendance_sync(), 2)
 
 
+    def _start_network_monitoring(self):
+        # 轻量网络监听：从离线恢复为在线时，立即触发一次同步与当月回填
+        if getattr(self, '_net_mon_ev', None):
+            return
+        self._net_online = None
+        self._net_mon_inflight = False
+        self._net_mon_ev = Clock.schedule_interval(lambda *_: self._network_monitor_tick(), 12)
+        Clock.schedule_once(lambda *_: self._network_monitor_tick(), 1.2)
+
+
+    def _network_monitor_tick(self):
+        if getattr(self, '_net_mon_inflight', False):
+            return
+
+        app = App.get_running_app()
+        base_url = str(getattr(app, 'server_url', '') or get_server_url() or '')
+        if not base_url:
+            return
+
+        self._net_mon_inflight = True
+
+        def work():
+            online = False
+            try:
+                api = GlimmerAPI(base_url, timeout=3.0)
+                online = bool(api.health())
+            except Exception:
+                online = False
+
+            def ui(_dt):
+                try:
+                    prev = getattr(self, '_net_online', None)
+                    self._net_online = online
+
+                    # 离线 -> 在线：立刻补传一次，并拉当月记录回填
+                    if prev is False and online is True:
+                        self._trigger_attendance_sync()
+                        try:
+                            self._sync_attendance_month_from_server(datetime.now().strftime('%Y-%m'))
+                        except Exception:
+                            pass
+                finally:
+                    self._net_mon_inflight = False
+
+            Clock.schedule_once(ui, 0)
+
+        Thread(target=work, daemon=True).start()
+
+
     def _parse_location_text(self, location_text: str):
         try:
             if not location_text:
@@ -532,7 +584,17 @@ class MainScreen(Screen):
                         notes = (notes + ' ' + tag).strip()
 
                     client_time = str(rec.get('timestamp') or '').strip() or None
-                    api.punch_attendance(token, status=status, lat=lat, lon=lon, notes=notes, group_id=None, client_time=client_time)
+                    punch_type = str(rec.get('punch_type') or '').strip() or None
+                    api.punch_attendance(
+                        token,
+                        status=status,
+                        lat=lat,
+                        lon=lon,
+                        notes=notes,
+                        group_id=None,
+                        client_time=client_time,
+                        punch_type=punch_type,
+                    )
 
 
                     if rid and hasattr(db, 'mark_attendance_synced'):
@@ -1571,17 +1633,80 @@ class MainScreen(Screen):
         m = (p.get('manufacturer') or '').lower()
         b = (p.get('brand') or '').lower()
         model = (p.get('model') or '').strip()
+        sdk = int(p.get('sdk') or 0)
 
-        tag = m or b
+        tag = (m or '') + ' ' + (b or '')
+        tag = tag.strip()
+
+        base = f"当前机型：{model or (m or b or '安卓设备')}"
+
+        # Android 12+ 常见的“精确位置”开关提示
+        precise_tip = '（如系统有“精确位置/大概位置”选项，请选择“精确位置”）' if sdk and sdk >= 31 else ''
+
         if any(x in tag for x in ('huawei', 'honor')):
-            return f"当前机型：{model or '华为/荣耀'}\n建议：定位模式选“高精度/使用WLAN和移动网络”，并在电池/后台管理里允许本应用后台运行与定位。"
-        if any(x in tag for x in ('xiaomi', 'redmi', 'poco')):
-            return f"当前机型：{model or '小米/红米'}\n建议：开启“精确位置”，允许后台定位，并在省电策略中将本应用设为“不限制”。"
-        if any(x in tag for x in ('oppo', 'realme', 'oneplus')):
-            return f"当前机型：{model or 'OPPO/一加/realme'}\n建议：允许后台定位/自启动，关闭省电限制，并确认系统定位服务为开启状态。"
-        if 'vivo' in tag:
-            return f"当前机型：{model or 'vivo'}\n建议：允许后台定位/自启动，关闭省电限制，并确认系统定位服务为开启状态。"
-        return (f"当前机型：{model}" if model else '')
+            return (
+                base
+                + "\n建议：定位模式选“高精度/使用WLAN和移动网络”，并在电池/后台管理里允许本应用后台运行与定位。"
+                + ("\n另外：请在权限里允许“始终定位/后台定位”。" if sdk and sdk >= 29 else '')
+            )
+
+        if any(x in tag for x in ('xiaomi', 'redmi', 'poco', 'miui')):
+            return (
+                base
+                + f"\n建议：开启“精确位置”{precise_tip}，允许后台定位，并在省电策略中将本应用设为“不限制/无限制”。"
+                + "\n另外：在“应用权限/自启动/后台弹出界面”里允许本应用。"
+            )
+
+        if any(x in tag for x in ('oppo', 'realme', 'oneplus', 'coloros')):
+            return (
+                base
+                + "\n建议：允许后台定位/自启动，关闭省电限制，并确认系统定位服务为开启状态。"
+                + "\n另外：在“应用管理-权限-定位”里选择“始终允许”。"
+            )
+
+        if any(x in tag for x in ('vivo', 'iqoo', 'originos')):
+            return (
+                base
+                + "\n建议：允许后台定位/自启动，关闭省电限制，并确认系统定位服务为开启状态。"
+                + "\n另外：在“电池-后台高耗电”里允许本应用。"
+            )
+
+        if 'samsung' in tag:
+            return (
+                base
+                + f"\n建议：开启“精确位置”{precise_tip}；将本应用电池使用设为“不受限制/不优化”；允许后台定位。"
+                + "\n路径参考：设置-位置-应用权限 / 设置-应用-电池。"
+            )
+
+        if any(x in tag for x in ('google', 'pixel', 'nexus')):
+            return (
+                base
+                + f"\n建议：开启“精确位置”{precise_tip}；定位权限选“始终允许”；关闭对本应用的电池优化。"
+            )
+
+        if any(x in tag for x in ('meizu', 'flyme')):
+            return (
+                base
+                + "\n建议：允许后台定位/自启动；在省电策略中将本应用设为“不限制”。"
+            )
+
+        if any(x in tag for x in ('lenovo', 'motorola', 'moto')):
+            return (
+                base
+                + f"\n建议：开启“精确位置”{precise_tip}；定位权限选“始终允许”；关闭电池优化/省电限制。"
+            )
+
+        if any(x in tag for x in ('sony', 'asus', 'zte', 'nubia')):
+            return (
+                base
+                + f"\n建议：开启“精确位置”{precise_tip}；允许后台定位；关闭电池优化；确保系统定位服务已开启。"
+            )
+
+        # 默认通用提示（覆盖更多机型）
+        return (
+            base
+            + f"\n建议：开启“精确位置”{precise_tip}；定位权限选“始终允许/后台允许”；关闭电池优化/省电限制；允许后台运行/自启动。"
+        )
 
 
 
@@ -1699,11 +1824,23 @@ class MainScreen(Screen):
         """获取今日日期字符串"""
         return datetime.now().strftime("%Y-%m-%d")
 
-    def has_record_today(self):
-        """检查今日是否已有记录"""
+    def _norm_punch_type(self, v: str | None) -> str:
+        x = str(v or '').strip().lower()
+        if x in ('checkin', 'in', 'start', '上班', '上班打卡', '上班签到'):
+            return 'checkin'
+        if x in ('checkout', 'out', 'end', '下班', '下班打卡', '下班签退'):
+            return 'checkout'
+        return ''
+
+    def _get_today_punch_state(self):
+        """返回今日有效打卡状态：{checkin: datetime|None, checkout: datetime|None}。
+
+        兼容旧数据：punch_type 为空且状态为成功/补录时，视为 checkin。
+        """
         app = App.get_running_app()
         if not hasattr(app, 'current_user'):
-            return False
+            return {'checkin': None, 'checkout': None}
+
         # 多端互通：在线时先把服务器当月记录同步到本地缓存，再渲染（离线仍可看）
         try:
             month_key = datetime.now().strftime('%Y-%m')
@@ -1711,10 +1848,53 @@ class MainScreen(Screen):
         except Exception:
             pass
 
-        records = db.get_user_attendance(app.current_user)
-
+        username = app.current_user
         today = self.get_today_str()
-        return any(record.get('date') == today for record in records)
+        records = db.get_user_attendance(username)
+
+        checkin_dt = None
+        checkout_dt = None
+
+        for r in (records or []):
+            if r.get('date') != today:
+                continue
+            if str(r.get('status') or '') not in ('打卡成功', '补录'):
+                continue
+
+            pt = self._norm_punch_type(r.get('punch_type'))
+            ts = str(r.get('timestamp') or '').strip()
+            dt = None
+            try:
+                if ts:
+                    dt = datetime.fromisoformat(ts)
+            except Exception:
+                dt = None
+
+            if not dt:
+                continue
+
+            # 旧数据/未标注 punch_type：按上班处理
+            if pt in ('', 'checkin'):
+                if (checkin_dt is None) or (dt < checkin_dt):
+                    checkin_dt = dt
+            elif pt == 'checkout':
+                if (checkout_dt is None) or (dt > checkout_dt):
+                    checkout_dt = dt
+
+        return {'checkin': checkin_dt, 'checkout': checkout_dt}
+
+    def has_record_today(self):
+        """兼容旧接口：今日是否已有有效打卡（上班或下班任意一次）。"""
+        st = self._get_today_punch_state()
+        return bool(st.get('checkin') or st.get('checkout'))
+
+    def has_checkin_today(self) -> bool:
+        st = self._get_today_punch_state()
+        return bool(st.get('checkin'))
+
+    def has_checkout_today(self) -> bool:
+        st = self._get_today_punch_state()
+        return bool(st.get('checkout'))
 
     def mark_setting(self, key, value):
         """更新用户设置中的状态字段"""
@@ -1726,23 +1906,8 @@ class MainScreen(Screen):
         db.save_user_settings(app.current_user, settings)
 
     def has_success_today(self):
-        app = App.get_running_app()
-        if not hasattr(app, 'current_user'):
-            return False
-        today = self.get_today_str()
-        # 多端互通：在线时先把服务器当月记录同步到本地缓存，再渲染（离线仍可看）
-        try:
-            month_key = datetime.now().strftime('%Y-%m')
-            self._sync_attendance_month_from_server(month_key)
-        except Exception:
-            pass
-
-        records = db.get_user_attendance(app.current_user)
-
-        return any(
-            record.get('date') == today and record.get('status') in ('打卡成功', '补录')
-            for record in records
-        )
+        """今日是否已完成上班打卡（用于“未打卡/补录提醒”等逻辑）。"""
+        return self.has_checkin_today()
 
     def publish_announcement(self, text):
         text = (text or '').strip()
@@ -1779,7 +1944,10 @@ class MainScreen(Screen):
 
 
     def is_within_range_and_time(self, settings):
-        """判断是否在范围与时间内"""
+        """判断是否在定位范围内。
+
+        说明：时间规则已由“打卡规则引擎”统一处理，这里只做范围判断。
+        """
         if not settings or not self.current_location:
             return False, None
 
@@ -1795,13 +1963,8 @@ class MainScreen(Screen):
         )
         distance_meters = distance * 1000
 
-        current_time = datetime.now().time()
-        punch_start = datetime.strptime(settings.get('punch_start', '09:00'), '%H:%M').time()
-        punch_end = datetime.strptime(settings.get('punch_end', '10:00'), '%H:%M').time()
-
         in_range = distance_meters <= set_radius
-        in_time = punch_start <= current_time <= punch_end
-        return in_range and in_time, int(distance_meters)
+        return bool(in_range), int(distance_meters)
 
     def auto_record_outside(self, settings, distance_meters):
         """超出范围或时间时自动记录一次"""
@@ -1860,8 +2023,162 @@ class MainScreen(Screen):
         self.load_attendance_records()
 
 
+    def _auto_window_type(self, t: dt_time) -> str:
+        # 自动打卡窗口：
+        # - 07:30-08:00 尝试上班
+        # - 20:00-20:30 尝试下班
+        if dt_time(7, 30) <= t <= dt_time(8, 0):
+            return 'checkin'
+        if dt_time(20, 0) <= t <= dt_time(20, 30):
+            return 'checkout'
+        return ''
+
+    def _is_time_allowed_for_type(self, punch_type: str, t: dt_time) -> bool:
+        # 规则：
+        # 上班窗口：00:00-20:00
+        # 下班窗口：08:00-23:59:59
+        if punch_type == 'checkin':
+            return dt_time(0, 0) <= t <= dt_time(20, 0)
+        if punch_type == 'checkout':
+            return dt_time(8, 0) <= t <= dt_time(23, 59, 59)
+        return False
+
+    def _decide_punch_type(self, now_dt: datetime, forced: str | None = None) -> tuple[str, str]:
+        forced_norm = self._norm_punch_type(forced)
+        if forced_norm in ('checkin', 'checkout'):
+            return forced_norm, ''
+
+        st = self._get_today_punch_state()
+        has_in = bool(st.get('checkin'))
+        has_out = bool(st.get('checkout'))
+
+        t = now_dt.time()
+
+        # 8:00前 -> 上班
+        if t < dt_time(8, 0):
+            if has_in:
+                return '', '今日上班打卡已完成'
+            return 'checkin', ''
+
+        # 20:00后 -> 下班
+        if t >= dt_time(20, 0):
+            if not has_in:
+                return '', '未上班打卡，无法下班打卡'
+            if has_out:
+                return '', '今日下班打卡已完成'
+            return 'checkout', ''
+
+        # 08:00-20:00：特殊规则
+        if not has_in:
+            return 'checkin', ''
+        if not has_out:
+            return 'checkout', ''
+        return '', '今日已完成上班与下班打卡'
+
+    def _send_punch_reminders(self, settings):
+        # 上班前提醒：>=07:30 且未上班
+        # 下班后提醒：>=20:00 且已上班未下班
+        today = self.get_today_str()
+        now = datetime.now()
+        t = now.time()
+
+        try:
+            st = self._get_today_punch_state()
+            has_in = bool(st.get('checkin'))
+            has_out = bool(st.get('checkout'))
+        except Exception:
+            has_in, has_out = False, False
+
+        if t >= dt_time(7, 30) and not has_in:
+            if str(settings.get('last_checkin_remind_date') or '') != today:
+                try:
+                    notification.notify(title='打卡提醒', message='请记得打卡上班', timeout=3)
+                except Exception:
+                    pass
+                settings['last_checkin_remind_date'] = today
+
+        if t >= dt_time(20, 0) and has_in and not has_out:
+            if str(settings.get('last_checkout_remind_date') or '') != today:
+                try:
+                    notification.notify(title='打卡提醒', message='请记得打卡下班', timeout=3)
+                except Exception:
+                    pass
+                settings['last_checkout_remind_date'] = today
+
+        try:
+            app = App.get_running_app()
+            if hasattr(app, 'current_user'):
+                db.save_user_settings(app.current_user, settings)
+        except Exception:
+            pass
+
+    def _try_auto_punch(self, settings, in_range: bool, distance_meters: int | None):
+        if not settings:
+            return
+        if not settings.get('auto_punch', False):
+            return
+
+        now = datetime.now()
+        today = self.get_today_str()
+        t = now.time()
+
+        target = self._auto_window_type(t)
+        if not target:
+            return
+
+        st = self._get_today_punch_state()
+        has_in = bool(st.get('checkin'))
+        has_out = bool(st.get('checkout'))
+
+        if target == 'checkin' and has_in:
+            return
+        if target == 'checkout':
+            if not has_in:
+                return
+            if has_out:
+                return
+
+        # 重试：每 5 分钟一次，最多 3 次
+        k_cnt = f"auto_retry_{today}_{target}_count"
+        k_ts = f"auto_retry_{today}_{target}_last_ts"
+        cnt = int(settings.get(k_cnt, 0) or 0)
+        last_ts = float(settings.get(k_ts, 0) or 0)
+        now_ts = time.time()
+
+        if cnt >= 3:
+            return
+        if last_ts and (now_ts - last_ts) < 300:
+            return
+
+        # 不满足条件：只记录重试，不写失败打卡（避免刷屏/刷记录）
+        if (not in_range) or (distance_meters is None):
+            settings[k_cnt] = cnt + 1
+            settings[k_ts] = now_ts
+            try:
+                app = App.get_running_app()
+                if hasattr(app, 'current_user'):
+                    db.save_user_settings(app.current_user, settings)
+            except Exception:
+                pass
+            return
+
+        # 满足条件立即打卡
+        settings[k_cnt] = cnt + 1
+        settings[k_ts] = now_ts
+        try:
+            app = App.get_running_app()
+            if hasattr(app, 'current_user'):
+                db.save_user_settings(app.current_user, settings)
+        except Exception:
+            pass
+
+        try:
+            self._perform_punch(forced_punch_type=target, is_auto=True)
+        except Exception:
+            return
+
     def evaluate_auto_mode(self):
-        """根据位置与时间自动处理打卡逻辑"""
+        """根据位置与规则引擎自动处理打卡/提醒逻辑"""
         settings = self.get_current_settings()
         if not settings:
             self.range_status_label.text = '范围状态: 未设置'
@@ -1875,43 +2192,38 @@ class MainScreen(Screen):
                     'longitude': settings.get('longitude')
                 }
 
-        in_range_time, distance_meters = self.is_within_range_and_time(settings)
-        auto_enabled = settings.get('auto_punch', False)
+        in_range, distance_meters = self.is_within_range_and_time(settings)
 
-
-        if in_range_time:
-            self.range_status_label.text = '范围状态: 已进入范围，可手动或自动打卡'
-            if auto_enabled and not self.has_record_today():
-                self.punch_card(None)
-                self.mark_setting('last_auto_punch', self.get_today_str())
-                self.mark_setting('last_auto_punch_time', datetime.now().isoformat())
-
+        if distance_meters is None:
+            self.range_status_label.text = '范围状态: 未获取'
+        elif in_range:
+            self.range_status_label.text = '范围状态: 已进入范围'
         else:
-            if distance_meters is None:
-                self.range_status_label.text = '范围状态: 未获取'
-                return
-            self.range_status_label.text = '范围状态: 未在范围或时间内'
-            if auto_enabled and self.current_location:
-                self.auto_record_outside(settings, distance_meters)
+            self.range_status_label.text = f"范围状态: 未在范围内（{int(distance_meters)}米）"
 
+        # 智能提醒
+        self._send_punch_reminders(settings)
+
+        # 自动打卡策略 + 重试
+        self._try_auto_punch(settings, bool(in_range), distance_meters)
+
+        # 补录提醒（保留原逻辑）
         self.remind_reapply_notice(settings)
 
     
     def punch_card(self, instance):
-        """执行打卡操作"""
+        """手动打卡按钮入口"""
+        self._perform_punch(forced_punch_type=None, is_auto=False)
+
+    def _perform_punch(self, forced_punch_type: str | None = None, is_auto: bool = False):
         app = App.get_running_app()
         if not hasattr(app, 'current_user'):
             return
 
-        if self.has_record_today():
-            self.show_popup("提醒", "今日已打卡成功，无需重复操作")
-            return
-        
-        # 获取用户设置
         settings = db.get_user_settings(app.current_user)
-        
         if not settings:
-            self.show_popup("错误", "请先设置打卡位置和时间")
+            if not is_auto:
+                self.show_popup("错误", "请先设置打卡位置")
             return
 
         # 桌面端手动定位测试：未获取GPS时使用设置坐标
@@ -1922,7 +2234,7 @@ class MainScreen(Screen):
                     'longitude': settings.get('longitude')
                 }
 
-        # Android 端强制使用"新鲜"的 GPS 定位（避免用到很久之前的缓存坐标）
+        # Android 端强制使用"新鲜"的定位（避免用到很久之前的缓存坐标）
         if kivy_platform == 'android':
             last_fix = getattr(self, '_gps_last_fix_ts', 0) or 0
             if (not self.current_location) or (not last_fix) or (time.time() - float(last_fix) > 120):
@@ -1930,51 +2242,69 @@ class MainScreen(Screen):
                     self.start_gps(0)
                 except Exception:
                     pass
-                self.show_popup("定位中", "正在获取GPS定位，请稍后再试")
+                if is_auto:
+                    return
+                hint = ''
+                try:
+                    hint = str(self._get_device_location_hint() or '').strip()
+                except Exception:
+                    hint = ''
+                msg = "正在获取GPS定位，请稍后再试"
+                if hint:
+                    msg = msg + "\n\n" + hint
+                self.show_popup("定位中", msg)
                 return
 
         if not self.current_location:
+            if is_auto:
+                return
             self.show_popup("错误", "无法获取当前位置")
             return
 
+        now_dt = datetime.now()
 
-        # 检查时间
-        current_time = datetime.now().time()
-        punch_start = datetime.strptime(settings.get('punch_start', '09:00'), '%H:%M').time()
-        punch_end = datetime.strptime(settings.get('punch_end', '10:00'), '%H:%M').time()
-
-        if current_time > punch_end:
-            self.show_reapply_popup("已超过打卡时间，是否申请补录？")
+        punch_type, reason = self._decide_punch_type(now_dt, forced=forced_punch_type)
+        if not punch_type:
+            if is_auto:
+                return
+            self.show_popup("提示", str(reason or '当前无需打卡'))
             return
 
-        
-        # 检查是否在设置的位置范围内
-        set_lat = settings.get('latitude')
-        set_lon = settings.get('longitude')
-        set_radius = settings.get('radius', 100)  # 默认100米
-        
-        distance = self.calculate_distance(
-            self.current_location['latitude'],
-            self.current_location['longitude'],
-            set_lat,
-            set_lon
-        )
-        
-        distance_meters = distance * 1000  # 转换为米
-        
-        # 判断打卡状态
-        if distance_meters <= set_radius:
-            if punch_start <= current_time <= punch_end:
-                status = "打卡成功"
-                notes = f"位置匹配，距离{int(distance_meters)}米"
-            else:
-                status = "打卡失败"
-                notes = f"位置匹配，但不在打卡时间内"
-        else:
-            status = "打卡失败"
-            notes = f"位置不匹配，距离{int(distance_meters)}米"
-        
-        # 保存打卡记录
+        # 时间窗口校验
+        if not self._is_time_allowed_for_type(punch_type, now_dt.time()):
+            if is_auto:
+                return
+            self.show_popup("提示", "当前时间不符合打卡规则")
+            return
+
+        # 禁止时间倒流（同日内不能早于上一次有效打卡）
+        st = self._get_today_punch_state()
+        last_dt = None
+        for x in (st.get('checkin'), st.get('checkout')):
+            if x is None:
+                continue
+            if (last_dt is None) or (x > last_dt):
+                last_dt = x
+        if last_dt and now_dt < last_dt:
+            if is_auto:
+                return
+            self.show_popup("提示", "禁止时间倒流：本次打卡时间不能早于上次打卡")
+            return
+
+        # 必须在定位范围内
+        in_range, distance_meters = self.is_within_range_and_time(settings)
+        if (not in_range) or (distance_meters is None):
+            if is_auto:
+                return
+            dm = (str(int(distance_meters)) if distance_meters is not None else '未知')
+            self.show_popup("提示", f"不在打卡范围内（{dm}米），请进入范围后再试")
+            return
+
+        role_text = '上班' if punch_type == 'checkin' else '下班'
+        status = "打卡成功"
+        notes = f"{role_text}打卡：位置匹配，距离{int(distance_meters)}米"
+
+        # 保存打卡记录（离线缓存，联网后自动补传）
         user_id = ''
         try:
             user_id = str((getattr(app, 'user_data', {}) or {}).get('user_id') or '')
@@ -1988,58 +2318,41 @@ class MainScreen(Screen):
         if not user_id:
             user_id = str(app.current_user)
 
-        record_id = db.add_attendance(
+        db.add_attendance(
             user_id,
             app.current_user,
             status,
             f"{self.current_location['latitude']:.6f}, {self.current_location['longitude']:.6f}",
-            notes
+            notes,
+            punch_type=punch_type,
         )
 
-
-        # 尝试立即同步（失败则保留在本地，等待网络恢复后自动补传）
         try:
             self._trigger_attendance_sync()
         except Exception:
             pass
 
-        # 更新状态显示
+        # UI
+        self.status_label.text = f"{role_text}打卡成功"
+        self.status_label.color = (0.2, 0.8, 0.2, 1)
+        self.punch_btn.background_color = (0.2, 0.8, 0.2, 1)
 
-        self.status_label.text = status
-        if status == "打卡成功":
-            self.status_label.color = (0.2, 0.8, 0.2, 1)
-            self.punch_btn.background_color = (0.2, 0.8, 0.2, 1)
-            
-            # 发送通知
-            notification.notify(
-                title='打卡成功',
-                message='上班打卡已完成',
-                timeout=2
-            )
+        # 通知 + 公告
+        try:
+            notification.notify(title=f"{role_text}打卡成功", message=f"{role_text}打卡已完成", timeout=2)
+        except Exception:
+            pass
 
-            app = App.get_running_app()
+        try:
             username = app.current_user if hasattr(app, 'current_user') else ''
-            message = f"打卡成功：{username} {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+            message = f"{role_text}打卡成功：{username} {now_dt.strftime('%Y-%m-%d %H:%M')}"
             self.publish_announcement(message)
-        else:
-            self.status_label.color = (0.8, 0.2, 0.2, 1)
-            self.punch_btn.background_color = (0.8, 0.2, 0.2, 1)
-            
-            app = App.get_running_app()
-            username = app.current_user if hasattr(app, 'current_user') else ''
-            message = f"补录提醒：{username} 今日打卡异常，请申请补录或放弃。"
-            self.publish_announcement(message)
-            self.mark_setting('last_reapply_notice_date', self.get_today_str())
+        except Exception:
+            pass
 
-            # 显示补录申请选项
-            self.show_reapply_popup("当前未在打卡时间段内，是否申请补录？")
-
-        
-        # 重新加载记录
         self.load_attendance_records()
-        
-        # 10秒后重置按钮状态
         Clock.schedule_once(self.reset_punch_button, 10)
+
 
     
     def reset_punch_button(self, dt):
@@ -2353,6 +2666,7 @@ class MainScreen(Screen):
                         key = f"server_{sid}"
                         punched_at = str(it.get('punched_at') or '')
                         date_str = str(it.get('date') or punched_at[:10] or '')
+                        punch_type = str(it.get('punch_type') or '').strip()
                         status = str(it.get('status') or '')
                         lat = it.get('lat', None)
                         lon = it.get('lon', None)
@@ -2369,6 +2683,7 @@ class MainScreen(Screen):
                             key,
                             user_id=user_id or str(username),
                             username=username,
+                            punch_type=punch_type,
                             status=status,
                             location=loc,
                             notes=notes,
@@ -2430,18 +2745,56 @@ class MainScreen(Screen):
             day_records = record_map.get(date_str, [])
 
 
+            has_checkin_effective = False
+
             if day_records:
-                times = []
+                checkin_dt = None
+                checkout_dt = None
+
+                # 只以“有效打卡”（打卡成功/补录）计算上下班
                 for item in day_records:
-                    ts = str(item.get('timestamp') or '')
+                    if str(item.get('status') or '') not in ("打卡成功", "补录"):
+                        continue
+                    ts = str(item.get('timestamp') or '').strip()
                     try:
-                        times.append(datetime.fromisoformat(ts).strftime("%H:%M"))
+                        dtv = datetime.fromisoformat(ts)
                     except Exception:
                         continue
-                times = sorted(times)
-                time_range = f"{times[0]} - {times[-1]}" if len(times) > 1 else (times[0] if times else "记录异常")
-                status_text = "已打卡" if any(item.get('status') in ("打卡成功", "补录") for item in day_records) else "异常"
-                status_color = (1, 1, 1, 1) if status_text == "已打卡" else (0.95, 0.6, 0.2, 1)
+
+                    pt = self._norm_punch_type(item.get('punch_type'))
+                    if pt in ('', 'checkin'):
+                        has_checkin_effective = True
+                        if checkin_dt is None or dtv < checkin_dt:
+                            checkin_dt = dtv
+                    elif pt == 'checkout':
+                        if checkout_dt is None or dtv > checkout_dt:
+                            checkout_dt = dtv
+
+                if checkin_dt and checkout_dt:
+                    time_range = f"上 {checkin_dt.strftime('%H:%M')} / 下 {checkout_dt.strftime('%H:%M')}"
+                    status_text = "已打卡"
+                    status_color = (1, 1, 1, 1)
+                elif checkin_dt and not checkout_dt:
+                    time_range = f"上 {checkin_dt.strftime('%H:%M')}"
+                    status_text = "未下班"
+                    status_color = (0.95, 0.6, 0.2, 1)
+                elif (not checkin_dt) and checkout_dt:
+                    time_range = f"下 {checkout_dt.strftime('%H:%M')}"
+                    status_text = "缺上班"
+                    status_color = (0.95, 0.6, 0.2, 1)
+                else:
+                    # 有记录但无有效打卡
+                    times = []
+                    for item in day_records:
+                        ts = str(item.get('timestamp') or '')
+                        try:
+                            times.append(datetime.fromisoformat(ts).strftime("%H:%M"))
+                        except Exception:
+                            continue
+                    times = sorted(times)
+                    time_range = f"{times[0]} - {times[-1]}" if len(times) > 1 else (times[0] if times else "记录异常")
+                    status_text = "异常"
+                    status_color = (0.95, 0.6, 0.2, 1)
             else:
                 time_range = "无记录"
                 status_text = "未打卡"
@@ -2449,7 +2802,7 @@ class MainScreen(Screen):
 
 
 
-            if any(item['status'] in ("打卡成功", "补录") for item in day_records):
+            if has_checkin_effective:
                 punch_days += 1
             else:
                 missed_days += 1

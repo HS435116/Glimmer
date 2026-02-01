@@ -52,7 +52,7 @@ from kivy.metrics import dp
 from kivy.storage.jsonstore import JsonStore
 from kivy.utils import platform as kivy_platform
 
-# plyer 在不同平台/权限环境下可能不可用。为避免移动端启动即异常导致“看起来进后台/闪退”，这里做容错。
+# plyer 在不同平台/权限环境下可能不可用。为避免移动端启动即异常导致"看起来进后台/闪退"，这里做容错。
 try:
     from plyer import gps, notification
 except Exception:  # pragma: no cover
@@ -70,6 +70,7 @@ import hmac
 import base64
 import uuid
 import math
+import webbrowser
 
 
 
@@ -203,7 +204,7 @@ class Database:
 
 
     
-    def add_attendance(self, user_id, username, status, location, notes=""):
+    def add_attendance(self, user_id, username, status, location, notes="", punch_type: str = ''):
 
         """添加打卡记录。
 
@@ -216,6 +217,7 @@ class Database:
             record_id,
             user_id=user_id,
             username=username,
+            punch_type=str(punch_type or '').strip(),
             status=status,
             location=location,
             notes=notes,
@@ -608,7 +610,7 @@ class LoginScreen(Screen):
 
     def on_enter(self):
         # 移动端部分机型/权限环境下，通知等能力可能不可用。
-        # 为避免启动即异常导致应用看起来“直接进后台/闪退”，这里做容错处理。
+        # 为避免启动即异常导致应用看起来"直接进后台/闪退"，这里做容错处理。
         try:
             self.refresh_server_public_announcement()
         except Exception:
@@ -618,7 +620,7 @@ class LoginScreen(Screen):
         except Exception:
             pass
 
-        # 登录页也周期性刷新“全局公告/版本信息”，确保工程师发布后尽快可见
+        # 登录页也周期性刷新"全局公告/版本信息"，确保工程师发布后尽快可见
         if not getattr(self, '_public_cfg_ev', None):
             self._public_cfg_ev = Clock.schedule_interval(lambda *_: self.refresh_server_public_announcement(), 15)
 
@@ -629,7 +631,7 @@ class LoginScreen(Screen):
         return time_text or text or ''
 
     def refresh_server_public_announcement(self):
-        # 未登录时也能获取“全局公告/版本信息”（工程师发布，所有用户可见）
+        # 未登录时也能获取"全局公告/版本信息"（工程师发布，所有用户可见）
         url = get_server_url()
         if not url:
             return
@@ -773,17 +775,56 @@ class LoginScreen(Screen):
         popup.open()
 
     def share_to_wechat(self, *_):
-        # 微信分享：Android 使用 Intent 调起微信分享；其它平台给出提示
-        try:
-            if kivy_platform != 'android':
-                self.show_popup('提示', '微信分享仅支持安卓设备')
-                return
+        # 分享下载链接（超链接）：优先调起微信；失败则展示可点击链接
+        base_url = str(get_server_url() or '').strip().rstrip('/')
+        if base_url and not base_url.startswith('http'):
+            base_url = 'http://' + base_url
+        if not base_url:
+            base_url = 'http://127.0.0.1:8000'
 
-            try:
-                from jnius import autoclass, cast
-            except Exception:
-                self.show_popup('提示', '分享组件不可用（缺少 jnius）')
-                return
+        # 纠正：0.0.0.0 仅用于服务端监听，不可作为客户端访问地址
+        base_url = base_url.replace('0.0.0.0', '127.0.0.1')
+
+        download_url = f"{base_url}/download/apk"
+        share_text = f"晨曦智能打卡 APK 下载链接：{download_url}\n打开链接即可直接下载最新版本"
+
+        def show_link_popup(title: str = '分享下载链接'):
+            content = BoxLayout(orientation='vertical', spacing=dp(10), padding=dp(18))
+            content.add_widget(Label(text='点击下方链接下载：', color=(1, 1, 1, 1), size_hint=(1, None), height=dp(24)))
+
+            link = Label(
+                text=f"[ref={download_url}]{download_url}[/ref]",
+                markup=True,
+                color=(0.6, 0.85, 1, 1),
+                halign='left',
+                valign='middle',
+                size_hint=(1, None),
+                height=dp(34),
+            )
+            link.bind(size=lambda i, v: setattr(i, 'text_size', v))
+            link.bind(on_ref_press=lambda _i, ref: webbrowser.open(str(ref)))
+            content.add_widget(link)
+
+            btn_row = BoxLayout(size_hint=(1, None), height=dp(44), spacing=dp(10))
+            open_btn = Button(text='打开链接', background_color=(0.2, 0.6, 0.8, 1))
+            close_btn = Button(text='关闭', background_color=(0.6, 0.6, 0.6, 1))
+            btn_row.add_widget(open_btn)
+            btn_row.add_widget(close_btn)
+            content.add_widget(btn_row)
+
+            popup = Popup(title=title, content=content, size_hint=(0.9, 0.45), background_color=(0.0667, 0.149, 0.3098, 1), background='')
+            open_btn.bind(on_press=lambda *_: webbrowser.open(download_url))
+            close_btn.bind(on_press=lambda *_: popup.dismiss())
+            popup.open()
+
+        # 非安卓：直接展示超链接
+        if kivy_platform != 'android':
+            show_link_popup('分享下载链接')
+            return
+
+        # 安卓：优先拉起微信分享；失败则回退弹窗
+        try:
+            from jnius import autoclass, cast
 
             Intent = autoclass('android.content.Intent')
             PythonActivity = autoclass('org.kivy.android.PythonActivity')
@@ -796,10 +837,8 @@ class LoginScreen(Screen):
             try:
                 pm.getPackageInfo('com.tencent.mm', 0)
             except Exception:
-                self.show_popup('提示', '未检测到微信，请先安装微信')
+                show_link_popup('未检测到微信，复制链接下载')
                 return
-
-            share_text = '晨曦智能打卡：团队考勤打卡应用（请在服务器内下载/安装最新版本）'
 
             intent = Intent()
             intent.setAction(Intent.ACTION_SEND)
@@ -809,8 +848,8 @@ class LoginScreen(Screen):
 
             chooser = Intent.createChooser(intent, cast('java.lang.CharSequence', String('分享到微信')))
             activity.startActivity(chooser)
-        except Exception as e:
-            self.show_popup('分享失败', str(e))
+        except Exception:
+            show_link_popup('分享下载链接')
 
 
     def update_logo_size(self, *args):
@@ -842,7 +881,7 @@ class LoginScreen(Screen):
         content.add_widget(btn_layout)
 
         popup = Popup(title='登录失败', content=content, size_hint=(0.86, 0.42), background_color=(0.0667, 0.149, 0.3098, 1), background='')
-        reset_btn.bind(on_press=lambda x: (popup.dismiss(), self.open_password_reset()))
+        reset_btn.bind(on_press=lambda x: (popup.dismiss(), self.open_forgot_password(None)))
         close_btn.bind(on_press=lambda x: popup.dismiss())
         popup.open()
 
@@ -971,7 +1010,7 @@ class LoginScreen(Screen):
     
     def _fallback_local_login(self, username: str, password: str, err: str | None):
         if err:
-            # 服务器不在线时统一提示“维护中”，但仍继续尝试本地登录
+            # 服务器不在线时统一提示"维护中"，但仍继续尝试本地登录
             try:
                 self.show_popup('提示', '服务器维护中，请稍后再试。。。')
             except Exception:
@@ -1067,7 +1106,7 @@ class LoginScreen(Screen):
                 try:
                     api = get_api()
 
-                    # 服务器不在线：统一提示“维护中”
+                    # 服务器不在线：统一提示"维护中"
                     if not api.health():
                         Clock.schedule_once(lambda *_: self.show_popup('登录失败', '服务器维护中，请稍后再试。。。'), 0)
                         return
@@ -1142,9 +1181,10 @@ class LoginScreen(Screen):
 
     
     def open_forgot_password(self, instance):
-        """忘记密码：通过密保问题找回（允许未配置服务器地址时手工输入）"""
+        """忘记密码：通过密保问题找回（使用默认服务器地址，无需用户手工输入）"""
         default_url = str(get_server_url() or '').strip()
         if not default_url:
+            # 兼容：曾经登录过但未写入 config 时，从 auth 里回填
             try:
                 if client_store.exists('auth'):
                     d = client_store.get('auth') or {}
@@ -1152,9 +1192,19 @@ class LoginScreen(Screen):
             except Exception:
                 default_url = ''
 
+        default_url = (default_url or '').strip().rstrip('/')
+        if default_url and not default_url.startswith('http'):
+            default_url = 'http://' + default_url
+
+        # 默认地址：主要用于本机调试/服务器同机部署
+        if not default_url:
+            default_url = 'http://127.0.0.1:8000'
+
+        # 纠正：0.0.0.0 仅用于服务端监听，不可作为客户端访问地址
+        default_url = default_url.replace('0.0.0.0', '127.0.0.1')
+
         content = BoxLayout(orientation='vertical', spacing=dp(10), padding=dp(16))
 
-        server_in = TextInput(hint_text='服务器地址（例如 http://1.2.3.4:8000）', multiline=False, size_hint=(1, None), height=dp(44), text=default_url)
         user_in = TextInput(hint_text='用户名', multiline=False, size_hint=(1, None), height=dp(44), text=self.username_input.text.strip())
 
         q_label = Label(text='密保问题：', color=(1, 1, 1, 1), halign='left', valign='middle', size_hint=(1, None), height=dp(30))
@@ -1163,7 +1213,6 @@ class LoginScreen(Screen):
         new_in = TextInput(hint_text='新密码（至少6位）', password=True, multiline=False, size_hint=(1, None), height=dp(44))
         new2_in = TextInput(hint_text='确认新密码', password=True, multiline=False, size_hint=(1, None), height=dp(44))
 
-        content.add_widget(server_in)
         content.add_widget(user_in)
         content.add_widget(q_label)
 
@@ -1191,20 +1240,16 @@ class LoginScreen(Screen):
 
             def work():
                 try:
-                    url = (server_in.text or '').strip().rstrip('/')
-                    if not url:
-                        raise RuntimeError('请输入服务器地址')
                     from glimmer_api import GlimmerAPI
-                    api = GlimmerAPI(url)
+                    api = GlimmerAPI(default_url)
                     if not api.health():
-                        raise RuntimeError('服务器不在线')
+                        raise RuntimeError('服务器不在线（如服务器IP有变更，请联系工程师在设置中更新服务器地址）')
                     data = api.security_question(u)
 
                     q = str((data or {}).get('security_question') or '')
                     Clock.schedule_once(lambda *_: setattr(q_label, 'text', f"密保问题：{q}" if q else '密保问题：未设置'), 0)
                 except Exception as e:
                     Clock.schedule_once(lambda *_, msg=str(e): setattr(q_label, 'text', f"密保问题：加载失败（{msg}）"), 0)
-
 
             Thread(target=work, daemon=True).start()
 
@@ -1225,19 +1270,15 @@ class LoginScreen(Screen):
 
             def work():
                 try:
-                    url = (server_in.text or '').strip().rstrip('/')
-                    if not url:
-                        raise RuntimeError('请输入服务器地址')
                     from glimmer_api import GlimmerAPI
-                    api = GlimmerAPI(url)
+                    api = GlimmerAPI(default_url)
                     if not api.health():
-                        raise RuntimeError('服务器不在线')
+                        raise RuntimeError('服务器不在线（如服务器IP有变更，请联系工程师在设置中更新服务器地址）')
                     api.reset_password(u, ans, new_pwd)
 
                     Clock.schedule_once(lambda *_: (popup.dismiss(), self.show_popup('成功', '密码已重置，请用新密码登录')), 0)
                 except Exception as e:
                     Clock.schedule_once(lambda *_, msg=str(e): self.show_popup('找回失败', msg), 0)
-
 
             Thread(target=work, daemon=True).start()
 
@@ -1643,7 +1684,7 @@ if __name__ == '__main__':
         except Exception:
             pass
 
-        # 兜底显示错误页（避免“点开就回桌面”）
+        # 兜底显示错误页（避免"点开就回桌面"）
         try:
             from kivy.app import App
             from kivy.uix.label import Label

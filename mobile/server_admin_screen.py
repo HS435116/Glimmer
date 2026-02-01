@@ -92,6 +92,9 @@ class ServerAdminScreen(Screen):
             pass
 
     def _popup(self, title: str, msg: str):
+        if str(title or '') == '错误':
+            msg = '服务器正在维护中，请稍后......'
+
         text = str(msg or '')
         align = 'left' if ('\n' in text or len(text) > 18) else 'center'
         valign = 'top' if align == 'left' else 'middle'
