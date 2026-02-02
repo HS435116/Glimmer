@@ -43,17 +43,6 @@ from kivy.clock import Clock
 from kivy.logger import Logger
 from kivy.storage.jsonstore import JsonStore
 
-
-
-
-
-
-# 重要：为兼容华为/鸿蒙部分机型启动敏感问题，避免在模块导入阶段做大量 import。
-# 屏幕类与 db 在 _init_screens() 中延迟导入。
-
-
-
-
 class AttendanceApp(App):
     """打卡应用主类"""
 
