@@ -45,7 +45,6 @@ from kivy.storage.jsonstore import JsonStore
 
 class AttendanceApp(App):
     """打卡应用主类"""
-
     def _diag_event(self, event_name: str, data=None):
         """轻量启动诊断：把关键生命周期事件记录到本地文件。
 
@@ -93,8 +92,6 @@ class AttendanceApp(App):
                 pass
         except Exception:
             pass
-
-
     def _log_exception(self, where: str):
         """把启动异常写入本地文件，方便在手机上定位“点开就回桌面/像进后台”的问题。"""
         try:
@@ -114,7 +111,6 @@ class AttendanceApp(App):
         except Exception:
             # 日志写入失败时忽略（避免二次异常）
             pass
-
 
     def _build_fallback_error_view(self):
         content = BoxLayout(orientation='vertical', spacing=dp(12), padding=dp(20))
@@ -381,7 +377,6 @@ class AttendanceApp(App):
                 }
 
 
-
                 self._diag_event('init_import_ok')
                 Clock.schedule_once(self._apply_imported_screens, 0)
             except Exception:
@@ -443,8 +438,6 @@ class AttendanceApp(App):
         finally:
             self._init_in_progress = False
             Clock.schedule_once(self._diag_save, 0)
-
-
 
     def build(self):
         """构建应用界面
@@ -516,7 +509,6 @@ class AttendanceApp(App):
             return self._build_fallback_error_view()
 
 
-    
     def on_start(self):
         """应用启动时调用"""
         # 设置窗口背景色（#11264F）
@@ -546,9 +538,6 @@ class AttendanceApp(App):
         Window.bind(on_request_close=self.on_request_close)
         Window.bind(on_keyboard=self.on_keyboard)
 
-
-
-
         # 移动端：不强制全屏/不强制 Window.show。
         # 部分机型（如部分华为系统）在启动时强制全屏/强制 show 可能触发异常的 pause/resume，
         # 表现为“点击后立刻回到桌面/像进入后台”。
@@ -567,11 +556,6 @@ class AttendanceApp(App):
         # 发布版不在运行时“清理文件”，避免误删导致异常
         # 如需清理，请在构建/发布流程中处理
 
-
-
-
-
-    
     def _ensure_foreground_and_login(self, *args):
         # 兼容保留：只做界面切换，不做 Window.show/强制拉前台。
         # 如需在特定机型上拉前台，应通过 Android 端 Activity 处理。
@@ -580,8 +564,6 @@ class AttendanceApp(App):
                 self.sm.current = 'login'
         except Exception:
             pass
-
-
 
     def on_keyboard(self, window, key, scancode, codepoint, modifiers):
         """拦截移动端返回键，避免系统默认行为把窗口直接送入后台"""
@@ -620,11 +602,6 @@ class AttendanceApp(App):
         # 默认：不允许后台，交还给系统（通常会停止/结束）
         return False
 
-
-
-
-
-    
     def _restore_cached_session(self, route: bool = False) -> bool:
         """从 glimmer_client.json 恢复服务器登录态。
 
@@ -697,10 +674,6 @@ class AttendanceApp(App):
         except Exception:
             pass
 
-
-
-
-
     def on_request_close(self, *args):
         """拦截返回/关闭。
 
@@ -743,11 +716,6 @@ class AttendanceApp(App):
         popup.open()
         return True
 
-
-
-
-
-
     def confirm_exit(self, popup):
 
         if popup:
@@ -759,9 +727,6 @@ class AttendanceApp(App):
             self.stop()
         finally:
             os._exit(0)
-
-
-
 
 # 应用配置
 
