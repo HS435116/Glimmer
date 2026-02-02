@@ -1032,162 +1032,30 @@ class MainScreen(Screen):
 
 
     def show_announcement_popup(self, instance):
-        system_text, system_time = self.get_system_announcement()
-        punch_text, punch_time = self.get_punch_announcement()
-
-        if not system_text and not punch_text:
-            self.show_popup("通知", "暂无公告")
-            return
-
-        if not self.is_logged_in():
-            if not system_text:
-                self.show_popup("通知", "暂无公告")
-                return
-            def close_only(*args):
-                self.update_announcement_indicator()
-            open_popup = None
-            def open_popup(text, time_text, key, token, on_close=None):
-                content = BoxLayout(orientation='vertical', spacing=dp(12), padding=dp(20))
-                title = f"公告时间：{time_text}" if time_text else "公告"
-                content.add_widget(Label(text=title, color=(0.9, 0.95, 1, 1)))
-
-                msg_scroll = ScrollView(size_hint=(1, 1), bar_width=dp(2))
-                message = Label(text=text, halign='left', valign='top', color=(1, 1, 1, 1), size_hint=(1, None))
-                message.bind(size=lambda instance, value: setattr(instance, 'text_size', (value[0], None)))
-                message.bind(texture_size=lambda instance, value: setattr(instance, 'height', value[1]))
-                msg_scroll.add_widget(message)
-                content.add_widget(msg_scroll)
-
-
-                close_btn = Button(text='关闭', size_hint=(1, None), height=dp(44), background_color=(0.2, 0.6, 0.8, 1))
-                content.add_widget(close_btn)
-
-                popup = Popup(title='公告提醒', content=content, size_hint=(0.88, 0.5), background_color=(0.0667, 0.149, 0.3098, 1), background='')
-
-                def handle_close(*args):
-                    popup.dismiss()
-                    if on_close:
-                        on_close()
-
-                close_btn.bind(on_press=handle_close)
-                popup.open()
-            open_popup(system_text, system_time, 'system', self.get_announcement_token(system_text, system_time), close_only)
-            return
-
-
-        system_token = self.get_announcement_token(system_text, system_time)
-        punch_token = self.get_announcement_token(punch_text, punch_time)
-        seen_system = self.get_announcement_seen_token('system')
-        seen_punch = self.get_announcement_seen_token('punch')
-        system_unseen = system_token and system_token != seen_system
-        punch_unseen = punch_token and punch_token != seen_punch
-
-        app = App.get_running_app()
-        role = ''
+        """公告入口：改为“页面 + ScrollView”展示（不再使用弹窗）。"""
         try:
-            role = str(getattr(app, 'server_role', '') or (getattr(app, 'user_data', {}) or {}).get('role') or '')
-        except Exception:
-            role = ''
-
-        admin_corr_cnt = 0
-        try:
-            if role == 'admin' and hasattr(app, 'current_user'):
-                s = db.get_user_settings(app.current_user) or {}
-                admin_corr_cnt = int(s.get('admin_notice_corr_count', 0) or 0)
-        except Exception:
-            admin_corr_cnt = 0
-
-        def goto_corr_tab():
-            try:
-                self.manager.current = 'server_admin'
-            except Exception:
+            if self.manager and self.manager.has_screen('announcement'):
+                scr = self.manager.get_screen('announcement')
+                try:
+                    if hasattr(scr, 'refresh'):
+                        scr.refresh()
+                except Exception:
+                    pass
+                self.manager.current = 'announcement'
                 return
+        except Exception:
+            pass
 
-            def _jump(_dt):
-                try:
-                    scr = self.manager.get_screen('server_admin')
-                    if hasattr(scr, 'show_tab'):
-                        scr.show_tab('corr')
-                except Exception:
-                    pass
-
-            Clock.schedule_once(_jump, 0.2)
-
-        punch_action = goto_corr_tab if (role == 'admin' and admin_corr_cnt > 0) else None
-
-        def open_popup(text, time_text, key, token, on_close=None, action=None, action_text='去处理'):
-            content = BoxLayout(orientation='vertical', spacing=dp(12), padding=dp(20))
-            title = f"公告时间：{time_text}" if time_text else "公告"
-            content.add_widget(Label(text=title, color=(0.9, 0.95, 1, 1)))
-
-            msg_scroll = ScrollView(size_hint=(1, 1), bar_width=dp(2))
-            message = Label(text=text, halign='left', valign='top', color=(1, 1, 1, 1), size_hint=(1, None))
-            message.bind(size=lambda instance, value: setattr(instance, 'text_size', (value[0], None)))
-            message.bind(texture_size=lambda instance, value: setattr(instance, 'height', value[1]))
-            msg_scroll.add_widget(message)
-            content.add_widget(msg_scroll)
-
-
-            btn_row = BoxLayout(size_hint=(1, None), height=dp(44), spacing=dp(10))
-            close_btn = Button(text='关闭', background_color=(0.2, 0.6, 0.8, 1))
-
-            def handle_close(*args):
-                self.mark_announcement_seen(key, token)
-                try:
-                    popup.dismiss()
-                except Exception:
-                    pass
-                if on_close:
-                    on_close()
-                else:
-                    self.update_announcement_indicator()
-
-            def handle_action(*args):
-                self.mark_announcement_seen(key, token)
-                try:
-                    popup.dismiss()
-                except Exception:
-                    pass
-                try:
-                    if action:
-                        action()
-                finally:
-                    self.update_announcement_indicator()
-
-            if action:
-                go_btn = Button(text=str(action_text or '去处理'), background_color=(0.18, 0.62, 0.38, 1))
-                go_btn.bind(on_press=handle_action)
-                btn_row.add_widget(go_btn)
-                close_btn.size_hint = (0.5, 1)
-                go_btn.size_hint = (0.5, 1)
-            else:
-                close_btn.size_hint = (1, 1)
-
-            close_btn.bind(on_press=handle_close)
-            btn_row.add_widget(close_btn)
-            content.add_widget(btn_row)
-
-            popup = Popup(title='公告提醒', content=content, size_hint=(0.88, 0.5), background_color=(0.0667, 0.149, 0.3098, 1), background='')
-            popup.open()
-
-
-        if system_unseen:
-            next_step = None
-            if punch_unseen:
-                next_step = lambda: open_popup(punch_text, punch_time, 'punch', punch_token, action=punch_action, action_text='去补录审核')
-
-            open_popup(system_text, system_time, 'system', system_token, next_step)
-            return
-
-        if punch_unseen:
-            open_popup(punch_text, punch_time, 'punch', punch_token, action=punch_action, action_text='去补录审核')
-
-            return
-
-        if system_text:
-            open_popup(system_text, system_time, 'system', system_token)
+        # 兜底：如果公告页面未注册
+        system_text, _system_time = self.get_system_announcement()
+        punch_text, _punch_time = self.get_punch_announcement()
+        if system_text or punch_text:
+            self.show_popup('通知', '公告页面未加载，请稍后重试')
         else:
-            open_popup(punch_text, punch_time, 'punch', punch_token, action=punch_action, action_text='去补录审核')
+            self.show_popup('通知', '暂无公告')
+
+
+
 
 
 
@@ -1789,26 +1657,41 @@ class MainScreen(Screen):
     
     def calculate_distance(self, lat1, lon1, lat2, lon2):
 
-        """计算两个坐标之间的距离（公里）"""
+        """计算两个坐标之间的距离（公里）。
+
+        兼容：lat/lon 可能为 str/None/空值；遇到无效值返回 None（不要让定时任务把 APP 崩溃）。
+        """
+        try:
+            lat1 = float(lat1)
+            lon1 = float(lon1)
+            lat2 = float(lat2)
+            lon2 = float(lon2)
+        except Exception:
+            return None
+
+        # 简单范围校验
+        if not (-90.0 <= lat1 <= 90.0 and -90.0 <= lat2 <= 90.0 and -180.0 <= lon1 <= 180.0 and -180.0 <= lon2 <= 180.0):
+            return None
+
         # 地球半径（公里）
         R = 6371.0
-        
+
         # 将角度转换为弧度
         lat1_rad = math.radians(lat1)
         lon1_rad = math.radians(lon1)
         lat2_rad = math.radians(lat2)
         lon2_rad = math.radians(lon2)
-        
+
         # 差值
         dlon = lon2_rad - lon1_rad
         dlat = lat2_rad - lat1_rad
-        
+
         # Haversine公式
-        a = math.sin(dlat / 2)**2 + math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(dlon / 2)**2
+        a = math.sin(dlat / 2) ** 2 + math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(dlon / 2) ** 2
         c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-        
-        distance = R * c
-        return distance
+
+        return R * c
+
 
     def get_current_settings(self):
         """获取当前用户设置"""
@@ -1944,24 +1827,42 @@ class MainScreen(Screen):
         """判断是否在定位范围内。
 
         说明：时间规则已由“打卡规则引擎”统一处理，这里只做范围判断。
+
+        兼容：设置坐标/当前坐标可能为空或类型不对，遇到异常返回 (False, None)。
         """
         if not settings or not self.current_location:
             return False, None
 
-        set_lat = settings.get('latitude')
-        set_lon = settings.get('longitude')
-        set_radius = settings.get('radius', 100)
+        set_lat = settings.get('latitude', None)
+        set_lon = settings.get('longitude', None)
+        if set_lat in (None, '') or set_lon in (None, ''):
+            return False, None
 
-        distance = self.calculate_distance(
-            self.current_location['latitude'],
-            self.current_location['longitude'],
-            set_lat,
-            set_lon
-        )
-        distance_meters = distance * 1000
+        try:
+            set_radius = int(float(settings.get('radius', 100) or 100))
+        except Exception:
+            set_radius = 100
+        if set_radius <= 0:
+            set_radius = 100
 
-        in_range = distance_meters <= set_radius
+        try:
+            cur_lat = self.current_location.get('latitude', None)
+            cur_lon = self.current_location.get('longitude', None)
+        except Exception:
+            return False, None
+
+        distance = self.calculate_distance(cur_lat, cur_lon, set_lat, set_lon)
+        if distance is None:
+            return False, None
+
+        try:
+            distance_meters = float(distance) * 1000.0
+        except Exception:
+            return False, None
+
+        in_range = distance_meters <= float(set_radius)
         return bool(in_range), int(distance_meters)
+
 
     def auto_record_outside(self, settings, distance_meters):
         """超出范围或时间时自动记录一次"""
@@ -2189,7 +2090,11 @@ class MainScreen(Screen):
                     'longitude': settings.get('longitude')
                 }
 
-        in_range, distance_meters = self.is_within_range_and_time(settings)
+        try:
+            in_range, distance_meters = self.is_within_range_and_time(settings)
+        except Exception:
+            in_range, distance_meters = False, None
+
 
         if distance_meters is None:
             self.range_status_label.text = '范围状态: 未获取'
@@ -2289,7 +2194,11 @@ class MainScreen(Screen):
             return
 
         # 必须在定位范围内
-        in_range, distance_meters = self.is_within_range_and_time(settings)
+        try:
+            in_range, distance_meters = self.is_within_range_and_time(settings)
+        except Exception:
+            in_range, distance_meters = False, None
+
         if (not in_range) or (distance_meters is None):
             if is_auto:
                 return
@@ -2599,8 +2508,15 @@ class MainScreen(Screen):
         Clock.unschedule(self.check_auto_punch)
     
     def check_auto_punch(self, dt):
-        """检查是否应该自动打卡"""
-        self.evaluate_auto_mode()
+        """检查是否应该自动打卡。
+
+        重要：此函数由 Clock 定时调用，必须吞掉异常，避免异常直接导致 APP 崩溃。
+        """
+        try:
+            self.evaluate_auto_mode()
+        except Exception:
+            return
+
 
     
     def check_auto_punch_settings(self, dt):
@@ -2977,3 +2893,309 @@ class MainScreen(Screen):
             background=''
         )
         popup.open()
+
+
+class AnnouncementScreen(Screen):
+    """公告/用户须知页面（可滚动，不用弹窗）。"""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._mode = 'notice'  # notice | manual
+        self._manual_cache = None
+
+        with self.canvas.before:
+            Color(0.0667, 0.149, 0.3098, 1)
+            self.bg_rect = Rectangle(pos=self.pos, size=self.size)
+        self.bind(pos=self._update_bg, size=self._update_bg)
+
+        root = BoxLayout(orientation='vertical', spacing=dp(8), padding=[dp(10), dp(8), dp(10), dp(10)])
+
+        header = BoxLayout(orientation='horizontal', size_hint=(1, None), height=dp(48), spacing=dp(8))
+        back_btn = Button(
+            text='返回',
+            size_hint=(None, 1),
+            width=dp(72),
+            font_size=dp(12),
+            background_color=(0.12, 0.2, 0.35, 0.95),
+            color=(1, 1, 1, 1),
+        )
+        back_btn.bind(on_press=self.go_back)
+        header.add_widget(back_btn)
+        header.add_widget(Label(text='公告与使用须知', color=(1, 1, 1, 1), font_size=dp(18), bold=True))
+        root.add_widget(header)
+
+        tabs = BoxLayout(orientation='horizontal', size_hint=(1, None), height=dp(42), spacing=dp(8))
+        self.notice_btn = Button(text='公告', background_color=(0.18, 0.62, 0.38, 1), color=(1, 1, 1, 1))
+        self.manual_btn = Button(text='须知', background_color=(0.18, 0.32, 0.55, 1), color=(1, 1, 1, 1))
+        self.notice_btn.bind(on_press=lambda *_: self.set_mode('notice'))
+        self.manual_btn.bind(on_press=lambda *_: self.set_mode('manual'))
+        tabs.add_widget(self.notice_btn)
+        tabs.add_widget(self.manual_btn)
+        root.add_widget(tabs)
+
+        self.scroll = ScrollView(size_hint=(1, 1), bar_width=dp(3))
+        self.content_label = Label(text='', halign='left', valign='top', color=(1, 1, 1, 1), size_hint=(1, None))
+        self.content_label.bind(size=lambda inst, val: setattr(inst, 'text_size', (val[0], None)))
+        self.content_label.bind(texture_size=lambda inst, val: setattr(inst, 'height', val[1]))
+        self.scroll.add_widget(self.content_label)
+        root.add_widget(self.scroll)
+
+        self.add_widget(root)
+
+    def _update_bg(self, *_):
+        try:
+            self.bg_rect.pos = self.pos
+            self.bg_rect.size = self.size
+        except Exception:
+            pass
+
+    def on_pre_enter(self, *args):
+        try:
+            self.refresh()
+        except Exception:
+            pass
+        return super().on_pre_enter(*args)
+
+    def go_back(self, *_):
+        try:
+            if self.manager and self.manager.has_screen('main'):
+                self.manager.current = 'main'
+                try:
+                    ms = self.manager.get_screen('main')
+                    if hasattr(ms, 'update_announcement_indicator'):
+                        ms.update_announcement_indicator()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    def set_mode(self, mode: str):
+        mode = str(mode or '').strip().lower()
+        if mode not in ('notice', 'manual'):
+            mode = 'notice'
+        self._mode = mode
+
+        # 高亮
+        self.notice_btn.background_color = (0.18, 0.62, 0.38, 1) if mode == 'notice' else (0.18, 0.32, 0.55, 1)
+        self.manual_btn.background_color = (0.18, 0.62, 0.38, 1) if mode == 'manual' else (0.18, 0.32, 0.55, 1)
+
+        self.refresh()
+
+    def _is_logged_in(self) -> bool:
+        try:
+            app = App.get_running_app()
+            return hasattr(app, 'current_user')
+        except Exception:
+            return False
+
+    def _get_system_announcement(self):
+        settings = db.get_user_settings('__global__') or {}
+        return str(settings.get('announcement_text', '') or ''), str(settings.get('announcement_time', '') or '')
+
+    def _get_punch_announcement(self):
+        if not self._is_logged_in():
+            return '', ''
+
+        app = App.get_running_app()
+        settings = db.get_user_settings(getattr(app, 'current_user', '') or '') or {}
+
+        role = ''
+        try:
+            role = str(getattr(app, 'server_role', '') or (getattr(app, 'user_data', {}) or {}).get('role') or '')
+        except Exception:
+            role = ''
+
+        if role == 'admin':
+            t = str(settings.get('admin_notice_text', '') or '')
+            tm = str(settings.get('admin_notice_time', '') or '')
+            if t:
+                return t, tm
+
+        t = str(settings.get('chat_notice_text', '') or '')
+        tm = str(settings.get('chat_notice_time', '') or '')
+        if t:
+            return t, tm
+
+        return str(settings.get('punch_notice_text', '') or ''), str(settings.get('punch_notice_time', '') or '')
+
+    def _token(self, text: str, time_text: str) -> str:
+        return str(time_text or text or '')
+
+    def _mark_seen(self, key: str, token: str):
+        if not token:
+            return
+        if not self._is_logged_in():
+            return
+        app = App.get_running_app()
+        username = str(getattr(app, 'current_user', '') or '')
+        if not username:
+            return
+        s = db.get_user_settings(username) or {}
+        s[f'announcement_seen_token_{key}'] = token
+        db.save_user_settings(username, s)
+
+    def _read_user_manual(self) -> str:
+        if self._manual_cache is not None:
+            return self._manual_cache
+
+        txt = ''
+        base = os.path.dirname(__file__)
+        candidates = [
+            os.path.join(base, 'assets', 'user_manual.md'),
+            os.path.join(base, '..', '用户使用须知.md'),
+        ]
+
+        for p in candidates:
+            try:
+                if os.path.exists(p):
+                    with open(p, 'r', encoding='utf-8') as f:
+                        txt = f.read()
+                    break
+            except Exception:
+                continue
+
+        if not txt:
+            txt = """# 晨曦智能打卡（Glimmer）用户使用须知
+
+本文面向日常使用人员（普通用户/管理员/工程师），用于快速了解功能与注意事项。
+
+---
+
+## 1. 账号与角色
+本系统以服务器账号为准，角色分为：
+- **普通用户（user）**：打卡、查看个人记录、加入/退出团队、提交补录申请、团队聊天。
+- **管理员（admin）**：在线管理（仅限自己创建的团队）：入队审核、补录审核、成员管理、发布团队公告、创建团队。
+- **工程师（engineer）**：全局管理：查看全部团队/用户资料、创建管理员账号、清理全服数据、发布全局公告、版本发布、广告发布等。
+
+> 安全说明：服务器不保存明文密码，仅保存密码哈希。
+
+---
+
+## 2. 新用户首次使用流程
+1) **注册账号**：填写用户名、密码，并设置密保问题与答案（用于找回密码）。
+2) **配置服务器地址**：在应用的服务器相关设置中填写服务器地址，例如 `http://1.2.3.4:8000`。
+3) **配置打卡设置**：进入【设置】页面填写/确认：
+   - 位置设置：纬度、经度、打卡半径、自动识别位置
+   - 时间设置：打卡开始/结束时间
+   - 自动打卡：开关
+4) **加入团队**：在【团队管理】输入团队ID（6位）申请加入，等待管理员审核。
+
+---
+
+## 3. 日常功能说明
+### 3.1 打卡
+- 在规定时间内，根据定位/半径规则进行打卡。
+- 打卡会记录打卡时间、状态、备注、经纬度（如有）。
+
+### 3.2 打卡记录查询
+- 支持按月查询。
+- 应用会对最近查询结果做本地缓存（用于提升体验）。
+
+### 3.3 补录
+- 漏打卡可提交补录申请并填写原因。
+- 管理员/工程师审核通过后，会自动写入“补录”记录。
+
+### 3.4 公告
+- 管理员：可发布自己团队公告。
+- 工程师：可发布全局公告。
+
+### 3.5 聊天
+- 团队成员可通过服务器中转聊天。
+- 服务器不可用时，聊天会禁用并提示，避免崩溃。
+
+---
+
+## 4. 在线管理（管理员/工程师）
+进入【在线管理】需要先登录服务器账号（获取 Token）。
+
+### 4.1 管理员（admin）
+- **仅管理自己创建的团队**：只会看到自己创建的团队。
+- 可执行：入队审核、补录审核、成员管理、发布团队公告、创建团队。
+
+### 4.2 工程师（engineer）
+- 服务器用户总人数（红色显示）。
+- 用户ID查询：按用户ID查询用户资料（包含最后登录IP、密码哈希等）。
+- 创建管理员：输入基础用户名（如 `admin`），系统自动分配可用用户名，默认密码 `admin123`。
+- 清理数据：高危操作，二次确认 + 输入密码后，清理全服用户数据（不可恢复）。
+
+---
+
+## 5. 用户ID规则（便于查询）
+为便于统一查询，本系统约定：
+- 工程师 ID：**固定 999**
+- 管理员 ID：**从 1000 开始递增**
+- 普通用户 ID：**从 50000 开始递增**
+
+---
+
+## 6. 常见问题
+- **登录提示“服务器维护中，请稍后再试。。。”**：通常是服务器地址错误、服务器未启动或网络不可达。
+- **加入团队无效/看不到团队**：确认团队ID正确，等待管理员在【入队审核】处理。
+- **打卡失败**：检查定位权限、经纬度/半径、是否在允许打卡时间范围。
+
+---
+
+## 7. 重要安全提醒
+- 不要把服务器数据库文件放到可被外网直接下载的目录/接口中。
+- 工程师“清理数据”为不可恢复操作，请谨慎使用。
+- 请妥善保管工程师账号与管理员账号。
+
+（可选）如需在 APK 中自定义/更新文案，可放置文件到：mobile/assets/user_manual.md
+"""
+
+
+        # 简单清理 markdown 头部符号
+        lines = []
+        for line in str(txt).replace('\r\n', '\n').split('\n'):
+            x = line.strip('\ufeff')
+            if x.startswith('#'):
+                x = x.lstrip('#').strip()
+            lines.append(x)
+        self._manual_cache = '\n'.join(lines).strip()
+        return self._manual_cache
+
+    def refresh(self):
+        mode = str(getattr(self, '_mode', 'notice') or 'notice')
+
+        if mode == 'manual':
+            self.content_label.text = self._read_user_manual() or '暂无使用须知'
+            return
+
+        system_text, system_time = self._get_system_announcement()
+        punch_text, punch_time = self._get_punch_announcement()
+
+        blocks = []
+        if system_text:
+            blocks.append('【系统公告】')
+            if system_time:
+                blocks.append(f'时间：{system_time}')
+            blocks.append(system_text)
+            blocks.append('')
+
+        if punch_text:
+            blocks.append('【打卡/提醒】')
+            if punch_time:
+                blocks.append(f'时间：{punch_time}')
+            blocks.append(punch_text)
+            blocks.append('')
+
+        if not blocks:
+            blocks = ['暂无公告']
+
+        self.content_label.text = '\n'.join(blocks).strip()
+
+        # 打开公告页即视为已读（不再弹窗），并更新首页闪烁提示
+        try:
+            self._mark_seen('system', self._token(system_text, system_time))
+            self._mark_seen('punch', self._token(punch_text, punch_time))
+        except Exception:
+            pass
+
+        try:
+            if self.manager and self.manager.has_screen('main'):
+                ms = self.manager.get_screen('main')
+                if hasattr(ms, 'update_announcement_indicator'):
+                    ms.update_announcement_indicator()
+        except Exception:
+            pass
+

@@ -351,7 +351,8 @@ class AttendanceApp(App):
                 if LoginScreen is None or RegisterScreen is None:
                     from main import LoginScreen, RegisterScreen
 
-                from main_screen import MainScreen
+                from main_screen import MainScreen, AnnouncementScreen
+
                 from settings_screen import SettingsScreen
                 from admin_screen import AdminScreen, AdManagerScreen, UserSearchScreen
                 from group_screen import GroupScreen
@@ -366,7 +367,9 @@ class AttendanceApp(App):
                     'LoginScreen': LoginScreen,
                     'RegisterScreen': RegisterScreen,
                     'MainScreen': MainScreen,
+                    'AnnouncementScreen': AnnouncementScreen,
                     'SettingsScreen': SettingsScreen,
+
                     'AdminScreen': AdminScreen,
                     'UserSearchScreen': UserSearchScreen,
                     'AdManagerScreen': AdManagerScreen,
@@ -397,7 +400,9 @@ class AttendanceApp(App):
                 ('login', screens['LoginScreen'](name='login')),
                 ('register', screens['RegisterScreen'](name='register')),
                 ('main', screens['MainScreen'](name='main')),
+                ('announcement', screens['AnnouncementScreen'](name='announcement')),
                 ('settings', screens['SettingsScreen'](name='settings')),
+
                 ('groups', screens['GroupScreen'](name='groups')),
                 ('chat', screens['ChatScreen'](name='chat')),
                 ('profile', screens['ProfileScreen'](name='profile')),
